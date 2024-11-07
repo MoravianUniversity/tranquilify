@@ -4,6 +4,24 @@
         "*.tcc": "cpp",
         "fstream": "cpp",
         "vector": "cpp",
-        "algorithm": "cpp"
+        "algorithm": "cpp",
+        "array": "c",
+        "cmath": "c",
+        "deque": "c",
+        "string": "c",
+        "unordered_map": "c",
+        "unordered_set": "c",
+        "exception": "c",
+        "functional": "c",
+        "string_view": "c",
+        "memory": "c",
+        "random": "c",
+        "initializer_list": "c",
+        "istream": "c",
+        "ostream": "c",
+        "numeric": "c",
+        "sstream": "c",
+        "streambuf": "c",
+        "system_error": "c"
     }
 }
