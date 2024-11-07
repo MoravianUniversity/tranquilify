@@ -32,15 +32,13 @@ QueueHandle_t queue = NULL;
 /**
  * Read I2S data into data buffer then write it to the SD card every so often.
  */
-void readAudioData() {
+void readAudioData() { 
     // TODO: several questions about i2s_read:
-    //    giving a smaller buffer size (e.g. 64) reduces latency but increases overhead, but does it need to be smaller in the i2s setup as well?
-    //    giving a larger buffer size here does report it fills it up, but does it actually fill it up (i.e. does it wait multiple internal fills)?
+    //    giving a smaller buffer size (e.g. 64) reduces latency but increases overhead
     //    giving a small timeout (instead of ininite) could also reduce latency
-    //    are we losing/missing data? (we can use the event queue for this)
     
     if (queue != NULL) {
-        // TODO: this only seems to work for a little while before it stops working, don't know why
+        // TODO: this only seems to work for a little while before it stops working (a total of like 6-8 messages displayed), don't know why
         i2s_event_t evt;
         while (xQueueReceive(queue, &evt, 0)) {
             if (evt.type == I2S_EVENT_DMA_ERROR) {
@@ -60,6 +58,13 @@ void readAudioData() {
         recordWAVData(audioBuffer, audioBufferOffset);
         audioBufferOffset = 0;
     }
+}
+
+void audioRecordingTask(void *pvParameters) {
+    while (true) {
+        readAudioData();
+    }
+    vTaskDelete(NULL);
 }
 
 
@@ -199,8 +204,8 @@ void i2s_install() {
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
         .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = 0,
-        .dma_buf_count = 8,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, // TODO: does a higher level make sense? (or 0 for default)
+        .dma_buf_count = 8, // TODO: no idea what this should be
         .dma_buf_len = DMA_BUFFER_SAMPLE_LEN,
         .use_apll = false,
         .tx_desc_auto_clear = false,  // for cleaner outputs when there are delays
@@ -238,4 +243,9 @@ void setupAudio() {
     delay(10); // Give time for codec to settle after setup
     i2s_install();
     i2s_setpin();
+
+    if (xTaskCreate(audioRecordingTask, "AudioRecording", 4096, NULL, 1, NULL) != pdPASS) {
+        Serial.println("!! Failed to create audio recording task");
+        while (1);
+    }
 }

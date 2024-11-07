@@ -2,9 +2,13 @@
 #include "audio.h"
 #include "settings.h"
 
+#define DISABLE_FS_H_WARNING
 #include <SPI.h>
 #include <SdFat.h>
 #include <sdios.h>
+
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
 
 // SD Card Pins
 #define SD_SCK  18
@@ -13,11 +17,31 @@
 #define SD_CS   5     // Thing Plus C
 
 #define SPI_SPEED SD_SCK_MHZ(25)  // TODO: best speed is 50 but nothing above 25 works
-#define SD_CONFIG SdSpiConfig(SD_CS, DEDICATED_SPI, SPI_SPEED)
+#define SD_CONFIG SdSpiConfig(SD_CS, SHARED_SPI /*DEDICATED_SPI*/, SPI_SPEED) // TODO: use DEDICATED_SPI for better performance (but fails with multiple tasks... see https://github.com/greiman/SdFat/issues/349)
+// One solution would be to use a task for just the SD cards and a queue of things to write and to which file
 
 SdFs sd;
 
+FsFile audioFile;
+
+FsFile timestampFile;
+unsigned long startTimestamp = 0;
+QueueHandle_t timestampQueue = NULL;
+
+// We use a mutex to protect the SD card and files from being accessed by multiple tasks at once.
+// Every use of the variables sd, audioFile, and timestampFile MUST be protected by this mutex.
+// The functions setupSD(), nextFiles(), ensureSDCardAndFiles(), and startWAVFile() must be protected by this mutex.
+SemaphoreHandle_t sdMutex;
+
+
+bool startWAVFile();
+void timestampRecordingTask(void *pvParameters);
+
+
+///// General SD Card /////
+
 bool setupSD() {
+    // Initialize SD card
     if (!sd.begin(SD_CONFIG)) {
         if (sd.card()->errorCode()) { Serial.printf("!! SD card initialization failed: 0x%02x 0x%08x\n", int(sd.card()->errorCode()), int(sd.card()->errorData())); }
         else if (sd.vol()->fatType() == 0) { Serial.println("!! SD card not formatted with FAT16/FAT32/exFAT"); }
@@ -50,43 +74,107 @@ bool setupSD() {
     return true;
 }
 
+bool setupData() {
+    timestampQueue = xQueueCreate(8, sizeof(unsigned long));
+    if (!timestampQueue) { Serial.println("!! Failed to create timestamp queue"); return false; }
 
-char timestampFilePath[24] = "/timestamps.txt";
-char audioFilePath[24] = "/audio.wav";
-unsigned long startTimestamp = 0;
+    sdMutex = xSemaphoreCreateMutex();
+    if (!sdMutex) { Serial.println("!! Failed to create SD mutex"); return false; }
 
-void nextFiles() {
-    int counter = incrementCounter();
-    sprintf(timestampFilePath, "/timestamps_%06d.txt", counter);
-    sprintf(audioFilePath, "/audio_%06d.wav", counter);
-    startTimestamp = millis(); // the time that the timestamps are relative to
+    if (xTaskCreate(timestampRecordingTask, "TimestampRecording", 4096*2, NULL, 1, NULL) != pdPASS) {
+        Serial.println("!! Failed to create timestamp recording task");
+        return false;
+    }
+
+    xSemaphoreTake(sdMutex, portMAX_DELAY);
+    bool retval = setupSD();
+    xSemaphoreGive(sdMutex);
+    return retval;
 }
 
-bool ensureSDCardAndFilePaths() {
+bool nextFiles() {
+    // Make sure the current files have all pending data written and are closed
+    if (audioFile) {
+        audioFile.close();
+    }
+    if (timestampFile) {
+        // Make sure all timestamps are written before closing the file
+        if (uxQueueMessagesWaiting(timestampQueue) > 0) {
+            xSemaphoreGive(sdMutex);  // temporarily release the mutex
+            while (uxQueueMessagesWaiting(timestampQueue) > 0) { yield(); }
+            xSemaphoreTake(sdMutex, portMAX_DELAY); // re-acquire the mutex
+        }
+        // Technically, we could lose the last few microsecond of timestamps here, but it's not a big deal
+        timestampFile.close();
+    }
+
+    int counter = incrementCounter();
+    char filepath[32];
+
+    sprintf(filepath, "/audio_%06d.wav", counter);
+    audioFile = sd.open(filepath, O_WRONLY | O_CREAT | O_EXCL);
+    if (!audioFile) { Serial.printf("!! Failed to create file '%s'\n", filepath); return false; }
+    if (!startWAVFile()) { return false; }
+    
+    sprintf(filepath, "/timestamps_%06d.txt", counter);
+    timestampFile = sd.open(filepath, O_WRONLY | O_CREAT | O_EXCL);
+    if (!timestampFile) { Serial.printf("!! Failed to create file '%s'\n", filepath); audioFile.close(); return false; }
+    xQueueReset(timestampQueue);
+    startTimestamp = millis(); // the time that the timestamps are relative to
+
+    return true;
+}
+
+bool ensureSDCardAndFiles() {
     // If the SD card isn't initialized, set it up
     if (sd.card()->errorCode() != 0 || sd.vol()->fatType() == 0) {
         if (!setupSD()) { return false; }
     }
 
-    // TODO: if the file path variables are not set up call nextFiles() - don't want to do this yet while testing though
+    // Make sure files are availale
+    if (!audioFile || !timestampFile) {
+        // if (!nextFiles()) { return false; }  // don't want to do this yet (while testing); once we do, remove all of the code below
+        audioFile = sd.open("/audio.wav", O_WRONLY | O_CREAT | O_TRUNC);
+        if (!audioFile) { Serial.println("!! Failed to create audio file"); return false; }
+        if (!startWAVFile()) { audioFile.close(); return false; }
+        timestampFile = sd.open("/timestamps.txt", O_WRONLY | O_CREAT | O_TRUNC);
+        if (!timestampFile) { Serial.println("!! Failed to create timestamp file"); audioFile.close(); return false; }
+    }
 
     return true;
 }
 
-bool writeFile(const char * path, const char * content) {
-    FsFile file = sd.open(path, FILE_WRITE);
-    if (!file) { Serial.printf("!! Failed to open file %s for writing\n", path); return false; }
-    if (!file.print(content)) { Serial.println("!! Write failed"); file.close(); return false; }
-    file.close();
-    return true;
-}
 
-bool recordTimestamp() {
-    if (!ensureSDCardAndFilePaths()) { return false; }
+///// Timestamps /////
+
+void timestampRecordingTask(void *pvParameters) {
+    unsigned long timestamp;
     char buffer[32];
-    sprintf(buffer, "%lu\n", millis() - startTimestamp);
-    return writeFile(timestampFilePath, buffer);
+    while (true) {
+        if (xQueueReceive(timestampQueue, &timestamp, portMAX_DELAY)) {
+            sprintf(buffer, "%lu\n", timestamp);
+            Serial.print(buffer);
+            xSemaphoreTake(sdMutex, portMAX_DELAY);
+            if (ensureSDCardAndFiles()) {
+                if (timestampFile.print(buffer) != 0) { timestampFile.flush(); }
+                else { Serial.printf("!! Failed to write timestamp %lu to file\n", timestamp); timestampFile.close(); }
+            }
+            xSemaphoreGive(sdMutex);
+        }
+    }
+    vTaskDelete(NULL);
 }
+
+bool recordTimestampFromISR() {
+    unsigned long timestamp = millis() - startTimestamp;
+    BaseType_t higherPriorityTaskWoken = pdFALSE;
+    BaseType_t retval = timestampQueue ? xQueueSendFromISR(timestampQueue, &timestamp, &higherPriorityTaskWoken) : pdFALSE;
+    if (higherPriorityTaskWoken) { portYIELD_FROM_ISR(); }
+    return retval == pdTRUE;
+}
+
+
+///// Audio /////
 
 struct WavHeader {
     uint8_t FileTypeBlocID[4];
@@ -104,7 +192,7 @@ struct WavHeader {
     uint32_t DataSize;
 };
 
-FsFile startWAVFile() {
+bool startWAVFile() {
     WavHeader header = {
         .FileTypeBlocID = { 'R', 'I', 'F', 'F' },
         .FileSize = sizeof(WavHeader) - 8, // updated as data is written
@@ -120,41 +208,42 @@ FsFile startWAVFile() {
         .DataBlocID = { 'd', 'a', 't', 'a' },
         .DataSize = 0, // updated as data is written
     };
-    FsFile file = sd.open(audioFilePath, O_WRONLY | O_CREAT | O_TRUNC); // write and create   // TODO: eventually use O_EXCL instead of O_TRUNC
-    if (!file) { Serial.printf("!! Failed to create WAV file %s\n", audioFilePath); return file; }
-    // TODO: file.preAllocate(...) // pre-allocate space for the file for an hour of recording (or max left on card minus a few KB)
-    if (file.write((uint8_t*)&header, sizeof(header)) != sizeof(header)) { Serial.println("!! Failed to write complete WAV header"); file.close(); }
-    return file;
+    // TODO: audioFile.preAllocate(...) // pre-allocate space for the file for an hour of recording (or max left on card minus a few KB): ONE_HOUR_OF_DATA + sizeof(WavHeader)
+    if (audioFile.write((uint8_t*)&header, sizeof(header)) != sizeof(header)) {
+        Serial.println("!! Failed to write complete WAV header");
+        return false;
+    }
+    audioFile.flush();
+    return true;
 }
 
 bool recordWAVData(uint8_t* data, uint32_t length) {
     // TODO: can this whole thing be done asynchronously? we would need a double buffer for the audio data, but we could then not hold up the main loop
-    if (!ensureSDCardAndFilePaths()) { return false; }
-
-    // Open the file for writing, creating if necessary
-    FsFile file = !sd.exists(audioFilePath) ? startWAVFile() : sd.open(audioFilePath, O_WRONLY | O_AT_END); // write but don't create, start at end
-    if (!file) { Serial.printf("!! Failed to open WAV file %s\n", audioFilePath); return false; }
+    xSemaphoreTake(sdMutex, portMAX_DELAY);
+    if (!ensureSDCardAndFiles()) { xSemaphoreGive(sdMutex); return false; }
 
     // Append the data
-    size_t written = file.write(data, length);
-    if (written == 0) { Serial.println("!! Failed to write any WAV data"); file.close(); return false; }
+    size_t cur_size = audioFile.size();
+    if (!audioFile.seek(cur_size)) { Serial.println("!! Failed to seek to end of WAV data"); audioFile.close(); xSemaphoreGive(sdMutex); return false; }
+    size_t written = audioFile.write(data, length);
+    if (written == 0) { Serial.println("!! Failed to write any WAV data"); audioFile.close(); xSemaphoreGive(sdMutex); return false; }
     if (written != length) { Serial.printf("!! Warning: only wrote %llu bytes of WAV data instead of %llu. SD card is probably full\n", written, length); }
 
     // Update sizes in headers
-    size_t cur_size = file.size();
     size_t new_size = cur_size + written;
-    if (!file.seek(4)) { Serial.println("!! Failed to seek to file size in WAV header"); file.close(); return false; }
+    if (!audioFile.seek(4)) { Serial.println("!! Failed to seek to file size in WAV header"); audioFile.close(); xSemaphoreGive(sdMutex); return false; }
     size_t file_size = new_size - 8;
-    if (file.write((uint8_t*)&file_size, 4) != 4) { Serial.println("!! Failed to write file size in WAV header"); file.close(); return false; }
-    if (!file.seek(40)) { Serial.println("!! Failed to seek to data size in WAV header"); file.close(); return false; }
+    if (audioFile.write((uint8_t*)&file_size, 4) != 4) { Serial.println("!! Failed to write file size in WAV header"); audioFile.close(); xSemaphoreGive(sdMutex); return false; }
+    if (!audioFile.seek(40)) { Serial.println("!! Failed to seek to data size in WAV header"); audioFile.close(); xSemaphoreGive(sdMutex); return false; }
     size_t data_size = new_size - sizeof(WavHeader);
-    if (file.write((uint8_t*)&data_size, 4) != 4) { Serial.println("!! Failed to write data size in WAV header"); file.close(); return false; }
+    if (audioFile.write((uint8_t*)&data_size, 4) != 4) { Serial.println("!! Failed to write data size in WAV header"); audioFile.close(); xSemaphoreGive(sdMutex); return false; }
 
-    // Close the file
-    file.close();
+    // Flush/sync the file
+    audioFile.flush();
 
     // Every hour, start a new file (~600 MB, max WAV file is 4GB - same as FAT32 limit so we could do ~6.7 hours)
     if (data_size > ONE_HOUR_OF_DATA) { nextFiles(); }
 
+    xSemaphoreGive(sdMutex);
     return true;
 }

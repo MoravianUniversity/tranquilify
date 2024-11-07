@@ -21,10 +21,8 @@ void setup() {
     // Start I2C communication (must be before setupAudio())
     Wire.begin();
 
-    setupSD();
+    setupData();
     setupAudio();
 }
 
-void loop() {
-    readAudioData();
-}
+void loop() { yield(); }

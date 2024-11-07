@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 
-bool setupSD();
-bool recordTimestamp();
+bool setupData();
+
+bool recordTimestampFromISR();
+
 bool recordWAVData(uint8_t* data, uint32_t length);

@@ -9,4 +9,3 @@
 #define ONE_HOUR_OF_DATA (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * 3600)
 
 void setupAudio();
-void readAudioData();
