@@ -25,7 +25,7 @@ int setCounter(int counter) {
     File file = SPIFFS.open("/counter", FILE_WRITE);
     if (file) { file.write((uint8_t*)&counter, sizeof(counter)); file.close(); }
     _counter = counter;
-
+    return counter;
 }
 
 int incrementCounter() { return setCounter(getCounter() + 1); }
