@@ -13,7 +13,7 @@ void setup() {
 
     Serial.begin(115200);
     while (!Serial) { yield(); } delay(1000); // Give time to open serial monitor (for debugging)
-    Serial.println("SoundSound");
+    Serial.println("Tranquilify");
 
     setupSettings();
     setupButton();
