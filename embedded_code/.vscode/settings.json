@@ -24,5 +24,8 @@
         "streambuf": "c",
         "system_error": "c",
         "limits": "cpp"
-    }
+    },
+    "cSpell.words": [
+        "Tranquilify"
+    ]
 }
