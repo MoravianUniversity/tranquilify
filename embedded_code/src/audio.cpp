@@ -12,6 +12,7 @@ WM8960 audio_codec;
 #include <freertos/task.h>
 
 // I2S driver and event queue
+#include <driver/i2s.h>
 #include <freertos/queue.h>
 
 // ESP32 Thing Plus C I2S pins/port
