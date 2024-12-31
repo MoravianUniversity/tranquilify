@@ -8,6 +8,8 @@
 #include "data.h"
 #include "button.h"
 
+#define LED_PIN 13
+
 void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
@@ -18,6 +20,10 @@ void setup() {
 
     setupSettings();
     setupButton();
+
+    // To turn on the power for the Qwiic connector (takes a lot of power)
+    // pinMode(0, OUTPUT);
+    // digitalWrite(0, HIGH);
 
     // Start I2C communication (must be before setupAudio())
     Wire.begin();
