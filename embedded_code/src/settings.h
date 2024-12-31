@@ -4,6 +4,9 @@
 /** Set up the settings for the program. Settings are persistently stored in SPIFFS. */
 void setupSettings();
 
+
+///// Counter /////
+
 /** Get the current, persistently increasing, counter value. */
 int getCounter();
 /** Set the current, persistently increasing, counter value. Return the new value. */

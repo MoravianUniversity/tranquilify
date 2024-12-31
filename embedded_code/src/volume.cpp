@@ -78,6 +78,7 @@ void adjustVolumeTask(void* pvParameters) {
  * The return value indicates if the task was successfully created.
  */
 bool setupVolumeMonitor() {
+    // TODO: can the stack size be smaller?
     if (xTaskCreate(adjustVolumeTask, "AdjustVolume", 1024, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
         Serial.println("!! Failed to create the adjust volume task");
         return false;
