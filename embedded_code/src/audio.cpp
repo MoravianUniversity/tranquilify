@@ -16,23 +16,23 @@ WM8960 audio_codec;
 #include <freertos/queue.h>
 
 // ESP32 Thing Plus C I2S pins/port
-#define I2S_WS       33 // DACLRC/ADCLRC/LRC/"word select"/"left-right-channel", toggles for left or right channel data
-#define I2S_ADC_DATA 27 // ADC_DATA/SD/"serial data in", carries the I2S audio data from codec's ADC to ESP32 I2S bus
-#define I2S_DAC_DATA 14 // DAC_DATA/SDO/"serial data out", carries the I2S audio data from ESP32 to codec DAC
-#define I2S_BCLK     32 // BCLK/SCK/"bit clock", this is the clock for I2S audio, can be controlled via controller or peripheral
-#define I2S_PORT I2S_NUM_0
+#define I2S_WS        33 // DACLRC/ADCLRC/LRC/"word select"/"left-right-channel", toggles for left or right channel data
+#define I2S_ADC_DATA  27 // ADC_DATA/SD/"serial data in", carries the I2S audio data from codec's ADC to ESP32 I2S bus
+#define I2S_DAC_DATA  14 // DAC_DATA/SDO/"serial data out", carries the I2S audio data from ESP32 to codec DAC
+#define I2S_BCLK      32 // BCLK/SCK/"bit clock", this is the clock for I2S audio, can be controlled via controller or peripheral
+#define I2S_PORT I2S_NUM_0 // Define which I2S peripheral to use
 
 // Audio Recording Buffers
 #define DMA_BUFFER_SAMPLE_LEN 1024 // from ~64 to 1024 - lower reduces latency but increases overhead (1024 is about 23.2ms of audio)
 #define DMA_BUFFER_BYTE_LEN (DMA_BUFFER_SAMPLE_LEN * BYTES_PER_SAMPLE * CHANNELS) // IMPORTANT: this cannot be > 4096
 #define WAV_BUFFER_LEN (100*BYTES_PER_SAMPLE*CHANNELS*SAMPLE_RATE/1000)  // 100 ms of audio buffered before writing to SD card
-uint8_t audioBuffer[WAV_BUFFER_LEN + DMA_BUFFER_BYTE_LEN]; // this will store the data over a larger period and write it all at once
-uint16_t audioBufferOffset = 0; // the current offset in the buffer
+uint8_t readBuffer[WAV_BUFFER_LEN + DMA_BUFFER_BYTE_LEN]; // this will store the data over a larger period and write it all at once
+uint16_t readBufferOffset = 0; // the current offset in the buffer
 
 
 #define RECORDING_VOLUME 55 // 24db; value from 0-63, maps to -17.25dB to +30.00dB with 0.75dB steps
 
-#define AUDIO_OUTPUT 1 // set to 0 for no audio output (just recording), 1 for loopback, 2 for manual output
+#define AUDIO_OUTPUT 2 // set to 0 for no audio output (just recording), 1 for loopback, 2 for manual output
 
 
 QueueHandle_t queue = NULL;
@@ -58,13 +58,13 @@ void readAudioData() {
     }
 
     size_t bytesRead = 0;
-    esp_err_t result = i2s_read(I2S_PORT, &audioBuffer[audioBufferOffset], DMA_BUFFER_BYTE_LEN, &bytesRead, portMAX_DELAY);
+    esp_err_t result = i2s_read(I2S_PORT, &readBuffer[readBufferOffset], DMA_BUFFER_BYTE_LEN, &bytesRead, portMAX_DELAY);
     if (result != ESP_OK) { Serial.println("!! I2S read error"); return; }
-    audioBufferOffset += bytesRead;
-    if (audioBufferOffset >= WAV_BUFFER_LEN) {
+    readBufferOffset += bytesRead;
+    if (readBufferOffset >= WAV_BUFFER_LEN) {
         // Write the buffer to the SD card every so often
-        recordWAVData(audioBuffer, audioBufferOffset);
-        audioBufferOffset = 0;
+        // TODO: recordWAVData(readBuffer, readBufferOffset);
+        readBufferOffset = 0;
     }
 }
 
@@ -76,6 +76,7 @@ void readAudioData() {
 void audioRecordingTask(void *pvParameters) {
     while (true) {
         readAudioData();
+        yield();
     }
     vTaskDelete(NULL);
 }
