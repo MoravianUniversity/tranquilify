@@ -1,9 +1,15 @@
 #include "audio.h"
 #include "data.h"
 
+#include <Arduino.h> // for Serial and WM8960 library
+
 // WM8960 audio codec board
 #include <SparkFun_WM8960_Arduino_Library.h>
 WM8960 audio_codec;
+
+// For the background task
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 // I2S driver and event queue
 #include <driver/i2s.h>
@@ -60,6 +66,11 @@ void readAudioData() {
     }
 }
 
+
+/**
+ * Permanent task that continually reads audio data from the I2S bus and write it to the SD card
+ * while also writing audio data back to the I2S bus for playback.
+ */
 void audioRecordingTask(void *pvParameters) {
     while (true) {
         readAudioData();
@@ -68,6 +79,10 @@ void audioRecordingTask(void *pvParameters) {
 }
 
 
+/**
+ * Set up the audio codec for recording and playing back audio.
+ * See the AUDIO_OUTPUT define for playback options.
+ */
 bool audio_codec_setup() {
     return // this is a chain of boolean ANDs, so if any fail, the whole thing fails
 
@@ -189,14 +204,15 @@ bool audio_codec_setup() {
         audio_codec.disableDacRight() &&
         audio_codec.disableDacMute() && // default is "soft mute" on, so we must disable mute to make channels active
 
-        //audio_codec.enableLoopBack() && // Loopback sends ADC data directly into DAC
-        audio_codec.disableLoopBack() &&
-
-        audio_codec.enableDacMute();
+        //audio_codec.enableLoopBack(); // Loopback sends ADC data directly into DAC
+        audio_codec.disableLoopBack();
 }
 
 
-void i2s_install() {
+/**
+ * Set up the I2S driver. This makes the ESP32 the master and operate in both RX and TX modes.
+ */
+bool i2s_install() {
     // 16-bit stereo 44.1 kHz
     const i2s_driver_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX), // | I2S_MODE_TX would allow for output
@@ -213,14 +229,18 @@ void i2s_install() {
         .mclk_multiple = I2S_MCLK_MULTIPLE_DEFAULT,  // TODO: 512?
         .bits_per_chan = I2S_BITS_PER_CHAN_DEFAULT,
     };
-    if (i2s_driver_install(I2S_PORT, &i2s_config, 4, &queue) != ESP_OK) { Serial.println("!! i2s_driver_install()"); }
+    if (i2s_driver_install(I2S_PORT, &i2s_config, 4, &queue) != ESP_OK) { Serial.println("!! i2s_driver_install()"); return false; }
+    return true;
 
     //i2s_set_clk(I2S_PORT, SAMPLE_RATE, BITS_PER_SAMPLE, I2S_CHANNEL_STEREO);
     //i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN);
 }
 
 
-void i2s_setpin() {
+/**
+ * Set up the I2S pins for the ESP32 Thing Plus C.
+ */
+bool i2s_setpin() {
     const i2s_pin_config_t pin_config = {
         .mck_io_num = I2S_PIN_NO_CHANGE,
         .bck_io_num = I2S_BCLK,
@@ -228,7 +248,8 @@ void i2s_setpin() {
         .data_out_num = I2S_DAC_DATA,
         .data_in_num = I2S_ADC_DATA
     };
-    if (i2s_set_pin(I2S_PORT, &pin_config) != ESP_OK) { Serial.println("!! i2s_set_pin()"); }
+    if (i2s_set_pin(I2S_PORT, &pin_config) != ESP_OK) { Serial.println("!! i2s_set_pin()"); return false; }
+    return true;
 }
 
 
@@ -240,9 +261,8 @@ void i2s_setpin() {
 void setupAudio() {
     if (!audio_codec.begin()) { Serial.println("!! WM8960 audio codec did not respond. Please check wiring."); while (1); }
     if (!audio_codec_setup()) { Serial.println("!! WM8960 audio codec setup failed."); while (1); }
-    delay(10); // Give time for codec to settle after setup
-    i2s_install();
-    i2s_setpin();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Give time for codec to settle after setup
+    if (!i2s_install() || !i2s_setpin()) { while (1); }
 
     if (xTaskCreate(audioRecordingTask, "AudioRecording", 4096, NULL, 1, NULL) != pdPASS) {
         Serial.println("!! Failed to create audio recording task");
