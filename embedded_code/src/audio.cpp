@@ -7,12 +7,11 @@
 #include <SparkFun_WM8960_Arduino_Library.h>
 WM8960 audio_codec;
 
-// For the background task
+// Background task
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 // I2S driver and event queue
-#include <driver/i2s.h>
 #include <freertos/queue.h>
 
 // ESP32 Thing Plus C I2S pins/port
@@ -25,6 +24,7 @@ WM8960 audio_codec;
 // Audio Recording Buffers
 #define DMA_BUFFER_SAMPLE_LEN 1024 // from ~64 to 1024 - lower reduces latency but increases overhead (1024 is about 23.2ms of audio)
 #define DMA_BUFFER_BYTE_LEN (DMA_BUFFER_SAMPLE_LEN * BYTES_PER_SAMPLE * CHANNELS) // IMPORTANT: this cannot be > 4096
+static_assert(DMA_BUFFER_BYTE_LEN <= 4096, "DMA buffer size must be <= 4096 bytes");
 #define WAV_BUFFER_LEN (100*BYTES_PER_SAMPLE*CHANNELS*SAMPLE_RATE/1000)  // 100 ms of audio buffered before writing to SD card
 uint8_t readBuffer[WAV_BUFFER_LEN + DMA_BUFFER_BYTE_LEN]; // this will store the data over a larger period and write it all at once
 uint16_t readBufferOffset = 0; // the current offset in the buffer
@@ -94,7 +94,6 @@ void audioRecordingTask(void *pvParameters) {
 uint32_t generateSineWave(float frequency, int16_t amplitude, uint32_t offset, uint16_t* buffer, uint32_t length) {
     const float angularFreq = 2.0 * PI * frequency / SAMPLE_RATE;
     for (int i = 0; i < length/2; i++) {
-        // TODO: big or little endian?
         buffer[2*i] = buffer[2*i+1] = amplitude * sin(angularFreq * (i + offset));
     }
     return (offset + length/2); // TODO: add in % so we don't overflow
@@ -273,7 +272,6 @@ bool audio_codec_setup() {
  * Set up the I2S driver. This makes the ESP32 the master and operate in both RX and TX modes.
  */
 bool i2s_install() {
-    // 16-bit stereo 44.1 kHz
     const i2s_driver_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX),
         .sample_rate = SAMPLE_RATE,
@@ -324,6 +322,8 @@ void setupAudio() {
     vTaskDelay(10 / portTICK_PERIOD_MS); // Give time for codec to settle after setup
     if (!i2s_install() || !i2s_setpin()) { while (1); }
 
+    // Start the audio recording task
+    // TODO: can the stack size be smaller?
     if (xTaskCreate(audioRecordingTask, "AudioRecording", 4096, NULL, 1, NULL) != pdPASS) {
         Serial.println("!! Failed to create audio recording task");
         while (1);
