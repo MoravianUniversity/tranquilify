@@ -82,6 +82,56 @@ void audioRecordingTask(void *pvParameters) {
 
 
 /**
+ * Generate a dual-channel sine wave.
+ * The frequency should be in the range of human hearing (20 Hz to 20 kHz).
+ * Two common frequencies are 440 Hz (A4) and 523.25 Hz (C5).
+ * The amplitude should be in the range of 0 to 32767.
+ * The offset is the starting point of the wave.
+ * This returns the new offset after generating the wave.
+ * The buffer length is in elements (not bytes).
+ */
+uint32_t generateSineWave(float frequency, int16_t amplitude, uint32_t offset, uint16_t* buffer, uint32_t length) {
+    const float angularFreq = 2.0 * PI * frequency / SAMPLE_RATE;
+    for (int i = 0; i < length/2; i++) {
+        // TODO: big or little endian?
+        buffer[2*i] = buffer[2*i+1] = amplitude * sin(angularFreq * (i + offset));
+    }
+    return (offset + length/2); // TODO: add in % so we don't overflow
+}
+
+
+/**
+ * Mix two audio samples together.
+ */
+void mixAudio(uint16_t* sample1, uint16_t* sample2, uint32_t length, float ratio, uint16_t* output) {
+    for (int i = 0; i < length; i++) {
+        output[i] = sample1[i] * ratio + sample2[i] * (1 - ratio);
+    }
+}
+
+/**
+ * Add two audio samples together. Does not check for overflow.
+ */
+void addAudio(uint16_t* sample1, uint16_t* sample2, uint32_t length, uint16_t* output) {
+    for (int i = 0; i < length; i++) {
+        output[i] = sample1[i] + sample2[i];
+    }
+}
+
+
+/**
+ * Send audio data to the I2S bus for playback.
+ */
+void sendAudioToI2S(uint8_t* data, uint32_t length) {
+    // TODO: is the loop necessary? can we just write the whole buffer at once? or maybe limit the size of each send or use a timeout and then use yield?
+    size_t bytesWritten = 0;
+    while (bytesWritten < length) {
+        i2s_write(I2S_PORT, &data[bytesWritten], length - bytesWritten, &bytesWritten, portMAX_DELAY);
+    }
+}
+
+
+/**
  * Set the volume of the audio codec.
  * The volume must be in the range -48 to 79 where:
  *   <0 is muted (should not be less than -48)

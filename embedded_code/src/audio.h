@@ -24,3 +24,23 @@ void setupAudio();
  *   0 to 79 is -73dB to +6dB in 1dB steps
  */
 void setVolume(int8_t volume);
+
+/**
+ * Generate a dual-channel sine wave.
+ * The frequency should be in the range of human hearing (20 Hz to 20 kHz).
+ * Two common frequencies are 440 Hz (A4) and 523.25 Hz (C5).
+ * The amplitude should be in the range of 0 to 32767.
+ * The offset is the starting point of the wave.
+ * This returns the new offset after generating the wave.
+ * The buffer length is in elements (not bytes).
+ */
+uint32_t generateSineWave(float frequency, int16_t amplitude, uint32_t offset, uint16_t* buffer, uint32_t length);
+
+/** Mix two audio samples together. */
+void mixAudio(uint16_t* sample1, uint16_t* sample2, uint32_t length, float ratio, uint16_t* output);
+
+/** Add two audio samples together. Does not check for overflow. */
+void addAudio(uint16_t* sample1, uint16_t* sample2, uint32_t length, uint16_t* output);
+
+/** Send audio data to the I2S bus for playback. The length is in bytes. */
+void sendAudioToI2S(uint8_t* data, uint32_t length);
