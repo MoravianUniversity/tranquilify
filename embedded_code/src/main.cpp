@@ -4,6 +4,7 @@
 
 #include "settings.h"
 #include "audio.h"
+#include "volume.h"
 #include "data.h"
 #include "button.h"
 
@@ -23,6 +24,7 @@ void setup() {
 
     setupData();
     setupAudio();
+    setupVolumeMonitor();
 }
 
 void loop() { yield(); }

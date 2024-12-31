@@ -23,14 +23,16 @@ WM8960 audio_codec;
 #define I2S_PORT I2S_NUM_0
 
 // Audio Recording Buffers
-#define DMA_BUFFER_SAMPLE_LEN 1024 // from ~64 to 1024 - lower reduces latency but increases overhead
+#define DMA_BUFFER_SAMPLE_LEN 1024 // from ~64 to 1024 - lower reduces latency but increases overhead (1024 is about 23.2ms of audio)
 #define DMA_BUFFER_BYTE_LEN (DMA_BUFFER_SAMPLE_LEN * BYTES_PER_SAMPLE * CHANNELS) // IMPORTANT: this cannot be > 4096
 #define WAV_BUFFER_LEN (100*BYTES_PER_SAMPLE*CHANNELS*SAMPLE_RATE/1000)  // 100 ms of audio buffered before writing to SD card
 uint8_t audioBuffer[WAV_BUFFER_LEN + DMA_BUFFER_BYTE_LEN]; // this will store the data over a larger period and write it all at once
 uint16_t audioBufferOffset = 0; // the current offset in the buffer
 
 
-#define DIRECT_OUTPUT // comment this out to suppress automatic output to headphones from microphone
+#define RECORDING_VOLUME 55 // 24db; value from 0-63, maps to -17.25dB to +30.00dB with 0.75dB steps
+
+#define AUDIO_OUTPUT 1 // set to 0 for no audio output (just recording), 1 for loopback, 2 for manual output
 
 
 QueueHandle_t queue = NULL;
@@ -80,6 +82,17 @@ void audioRecordingTask(void *pvParameters) {
 
 
 /**
+ * Set the volume of the audio codec.
+ * The volume must be in the range -48 to 79 where:
+ *   <0 is muted (should not be less than -48)
+ *   0 to 79 is -73dB to +6dB in 1dB steps
+ */
+void setVolume(int8_t volume) {
+    audio_codec.setHeadphoneVolume(volume + 48);
+}
+
+
+/**
  * Set up the audio codec for recording and playing back audio.
  * See the AUDIO_OUTPUT define for playback options.
  */
@@ -98,7 +111,7 @@ bool audio_codec_setup() {
         audio_codec.enableLMIC() &&
         audio_codec.enableRMIC() &&
 
-        // Connect from INPUT1 to "n" (aka inverting) inputs of PGAs.
+        // Connect from INPUT1 to "n" (aka inverting) inputs of PGAs (these are default to connected anyway)
         audio_codec.connectLMN1() &&
         audio_codec.connectRMN1() &&
 
@@ -106,9 +119,9 @@ bool audio_codec_setup() {
         audio_codec.disableLINMUTE() &&
         audio_codec.disableRINMUTE() &&
 
-        // Set pga volumes
-        audio_codec.setLINVOLDB(24.00) && // Valid options are -17.25dB to +30.00dB
-        audio_codec.setRINVOLDB(24.00) && // Valid options are -17.25dB to +30.00dB
+        // Set PGA volumes (value from 0-63, maps to -17.25dB to +30.00dB with 0.75dB steps)
+        audio_codec.setLINVOL(RECORDING_VOLUME) &&
+        audio_codec.setRINVOL(RECORDING_VOLUME) &&
 
         // Set input boosts to get inputs 1 to the boost mixers
         audio_codec.setLMICBOOST(WM8960_MIC_BOOST_GAIN_0DB) &&
@@ -130,48 +143,40 @@ bool audio_codec_setup() {
 
         //audio_codec.enablePgaZeroCross() && // TODO: what does this do?
 
-#ifdef DIRECT_OUTPUT
-        // Connect LB2LO (booster to output mixer (analog bypass))
+#if AUDIO_OUTPUT == 0  // no audio output
+        // Disconnect input boost mixer to output mixer (analog bypass) // this is default
+        // audio_codec.disableLB2LO() &&
+        // audio_codec.disableRB2RO() &&
+
+        // Disconnect DAC outputs from output mixer // this is default
+        // audio_codec.disableLD2LO() &&
+        // audio_codec.disableRD2RO() &&
+
+#else  // have audio output
+    #if AUDIO_OUTPUT == 1  // loopback
+        // Connect input boost mixer to output mixer (analog bypass)
         audio_codec.enableLB2LO() &&
         audio_codec.enableRB2RO() &&
-
-        // Connect from DAC outputs to output mixer
-        audio_codec.enableLD2LO() &&
-        audio_codec.enableRD2RO() &&
 
         // Set gainstage between booster mixer and output mixer
         audio_codec.setLB2LOVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
         audio_codec.setRB2ROVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
+    #else  // manual output 
+        // Connect from DAC outputs to output mixer
+        audio_codec.enableLD2LO() &&
+        audio_codec.enableRD2RO() &&
+    #endif
 
         // Enable output mixers
         audio_codec.enableLOMIX() &&
         audio_codec.enableROMIX() &&
 
-        // enable bypass connection from Left INPUT3 to Left output mixer, note, the
-        // default gain on this input (LI2LOVOL) is -15dB
-        //audio_codec.enableLI2LO() &&
-        //audio_codec.enableRI2RO() &&
+        // Provides VMID as buffer for headphone/speaker ground
+        audio_codec.enableOUT3MIX() &&
 
-        // sets volume control between "input" to "output mixer"
-        //audio_codec.setLI2LOVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
-        //audio_codec.setRI2ROVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
-
-        audio_codec.enableOUT3MIX() && // Provides VMID as buffer for headphone/speaker ground
-
+        // Enable headphone/speaker output
         audio_codec.enableHeadphones() &&
-        audio_codec.setHeadphoneVolumeDB(0.00) &&
-
-        //audio_codec.enableSpeakers() &&
-        //audio_codec.enableSpeakerZeroCross() &&
-        //audio_codec.setSpeakerVolume(120) &&
-#else
-        // Disconnect LB2LO (booster to output mixer (analog bypass))
-        audio_codec.disableLB2LO() &&
-        audio_codec.disableRB2RO() &&
-
-        // Disconnect from DAC outputs to output mixer
-        audio_codec.disableLD2LO() && // TODO: also above?
-        audio_codec.disableRD2RO() &&
+        //audio_codec.setHeadphoneVolumeDB(0.00) &&  // happens in the volume monitor task
 #endif
 
         // CLOCK STUFF, These settings will get you 44.1KHz sample rate, and class-d freq at 705.6kHz
@@ -187,22 +192,26 @@ bool audio_codec_setup() {
         //audio_codec.set_ADCDIV(0) && // default is 000 (what we need for 44.1KHz)
         //audio_codec.set_DACDIV(0) && // default is 000 (what we need for 44.1KHz)
         audio_codec.setWL(WM8960_WL_16BIT) &&
-
         audio_codec.enablePeripheralMode() &&
-        //audio_codec.enableMasterMode() &&
 
         // Set LR clock to be the same for ADC & DAC internally
         // Note: should not be changed while ADC is enabled
         audio_codec.setALRCGPIO() &&
 
-        // enable ADCs and DACs
+        // enable ADCs (allows for recording)
         audio_codec.enableAdcLeft() &&
         audio_codec.enableAdcRight() &&
-        //audio_codec.enableDacLeft() &&
-        //audio_codec.enableDacRight() &&
+
+        // enable DACs (allows for manual output)
+#if AUDIO_OUTPUT == 2  // manual output (using DAC)
+        audio_codec.enableDacLeft() &&
+        audio_codec.enableDacRight() &&
+        audio_codec.disableDacMute() && // default is "soft mute" on, so we must disable mute to make channels active
+#else
         audio_codec.disableDacLeft() &&
         audio_codec.disableDacRight() &&
-        audio_codec.disableDacMute() && // default is "soft mute" on, so we must disable mute to make channels active
+        audio_codec.enableDacMute() && 
+#endif
 
         //audio_codec.enableLoopBack(); // Loopback sends ADC data directly into DAC
         audio_codec.disableLoopBack();
@@ -215,13 +224,13 @@ bool audio_codec_setup() {
 bool i2s_install() {
     // 16-bit stereo 44.1 kHz
     const i2s_driver_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX), // | I2S_MODE_TX would allow for output
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX),
         .sample_rate = SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
         .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1, // TODO: does a higher level make sense? (or 0 for default)
-        .dma_buf_count = 8, // TODO: no idea what this should be
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,  // TODO: does a higher level make sense? (or 0 for default)
+        .dma_buf_count = 8,  // TODO: no idea what this should be
         .dma_buf_len = DMA_BUFFER_SAMPLE_LEN,
         .use_apll = false,
         .tx_desc_auto_clear = false,  // for cleaner outputs when there are delays
