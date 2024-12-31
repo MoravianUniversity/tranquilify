@@ -40,32 +40,40 @@ static_assert(MIN_VOLUME >= ABSOLUTE_MIN_VOLUME, "MIN_VOLUME must be greater tha
  */
 void adjustVolumeTask(void* pvParameters) {
     uint16_t volumeReadings[NUM_OF_VOL_READINGS] = {};  // used to make a rolling average of readings on ADC input
-    int volumeReadingPosition = 0;
-    bool firstTime = true;  // if we haven't filled the array yet
+    memset(volumeReadings, 0, sizeof(volumeReadings));
+    int32_t total = 0;  // the total of the last NUM_OF_VOL_READINGS readings
     uint8_t prevVolume = 0;  // the previous set volume level
 
+    // Get the initial readings and total
+    for (int i = 0; i < NUM_OF_VOL_READINGS; i++) {
+        volumeReadings[i] = analogRead(VOLUME_PIN);
+        total += volumeReadings[i];
+        vTaskDelay(VOL_READING_DELAY / portTICK_PERIOD_MS / 4); // shorter delay to get the initial readings faster
+    }
+
+    // Main loop to read the volume level and adjust the audio codec's volume
+    int i = 0;
     while (true) {
         // Read the volume level from the ADC into the rolling average array
-        volumeReadings[volumeReadingPosition] = analogRead(VOLUME_PIN);
-        if (++volumeReadingPosition > NUM_OF_VOL_READINGS) { volumeReadingPosition = 0; firstTime = false; }
-
-        // Calculate the average of the last 20 readings
-        int32_t total = 0;
-        int count = firstTime ? volumeReadingPosition : NUM_OF_VOL_READINGS;
-        for (int i = 0; i < count; i++) { total += volumeReadings[i]; }
-        int32_t average = total / count;
+        // Also update the total to make the average calculation faster
+        total -= volumeReadings[i];
+        volumeReadings[i] = analogRead(VOLUME_PIN);
+        total += volumeReadings[i];
+        if (++i >= NUM_OF_VOL_READINGS) { i = 0; }
 
         // Map it from 0-4096 to a volume level (0-79) [<0 is muted, 0 is -73dB, 79 is +6dB (1dB steps)]
-        int8_t volume = (ABSOLUTE_MAX_VOLUME - MIN_VOLUME) - (average * (MAX_VOLUME - MIN_VOLUME + 1)) / 4096;
+        int8_t volume = (ABSOLUTE_MAX_VOLUME - MIN_VOLUME) - (total * (MAX_VOLUME - MIN_VOLUME + 1)) / (NUM_OF_VOL_READINGS * 4096);
 
         // If the volume has changed, update the audio codec
         if (volume != prevVolume) {
             setVolume(volume);
-            //Serial.printf("Volume:  %03x  %02x  %d dB\n", average, volume, (int)volume - 73);
+            //Serial.printf("Volume:  %03x  %02x  %d dB\n", total/NUM_OF_VOL_READINGS, volume, (int)volume - 73);
         }
         prevVolume = volume;
 
         vTaskDelay(VOL_READING_DELAY / portTICK_PERIOD_MS);
+
+        // Serial.printf("Volume Monitor Task: %d\n", uxTaskGetStackHighWaterMark(NULL));
     }
 
     vTaskDelete(NULL);
@@ -78,8 +86,9 @@ void adjustVolumeTask(void* pvParameters) {
  * The return value indicates if the task was successfully created.
  */
 bool setupVolumeMonitor() {
-    // TODO: can the stack size be smaller?
-    if (xTaskCreate(adjustVolumeTask, "AdjustVolume", 1024, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
+    // A stack size of 1024 was just barely too small (could do a Serial.printf() but not setVolume())
+    // With +80, the high water mark is 40, indicating +40 should be sufficient, but reducing to +72 becomes too small
+    if (xTaskCreate(adjustVolumeTask, "AdjustVolume", 1024+80, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
         Serial.println("!! Failed to create the adjust volume task");
         return false;
     }
