@@ -154,8 +154,10 @@ void addAudio(uint16_t* sample1, uint16_t* sample2, uint32_t length, uint16_t* o
 void sendAudioToI2S(uint8_t* data, uint32_t length) {
     // TODO: is the loop necessary? can we just write the whole buffer at once? or maybe limit the size of each send or use a timeout and then use yield?
     size_t bytesWritten = 0;
-    while (bytesWritten < length) {
-        i2s_write(I2S_PORT, &data[bytesWritten], length - bytesWritten, &bytesWritten, portMAX_DELAY);
+    size_t offset = 0;
+    while (offset < length) {
+        i2s_write(I2S_PORT, &data[offset], length - offset, &bytesWritten, portMAX_DELAY);
+        offset += bytesWritten;
     }
 }
 
@@ -240,7 +242,7 @@ bool audio_codec_setup() {
         // Set gainstage between booster mixer and output mixer
         audio_codec.setLB2LOVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
         audio_codec.setRB2ROVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
-    #else  // manual output 
+    #else  // manual output
         // Connect from DAC outputs to output mixer
         audio_codec.enableLD2LO() &&
         audio_codec.enableRD2RO() &&
