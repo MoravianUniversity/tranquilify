@@ -350,16 +350,17 @@ bool i2s_setpin() {
  * Before this is called, the Serial and Wire interfaces must be set up.
  * If there is a problem with the audio setup, the program will freeze.
  */
-void setupAudio() {
-    if (!audio_codec.begin()) { Serial.println("!! WM8960 audio codec did not respond. Please check wiring."); while (1); }
-    if (!audio_codec_setup()) { Serial.println("!! WM8960 audio codec setup failed."); while (1); }
+bool setupAudio() {
+    if (!audio_codec.begin()) { Serial.println("!! WM8960 audio codec did not respond. Please check wiring."); return false; }
+    if (!audio_codec_setup()) { Serial.println("!! WM8960 audio codec setup failed."); return false; }
     vTaskDelay(10 / portTICK_PERIOD_MS); // Give time for codec to settle after setup
-    if (!i2s_install() || !i2s_setpin()) { while (1); }
+    if (!i2s_install() || !i2s_setpin()) { return false; }
 
     // Start the audio recording task
     // TODO: can the stack size be smaller?
     if (xTaskCreate(audioRecordingTask, "AudioRecording", 4096, NULL, 1, NULL) != pdPASS) {
         Serial.println("!! Failed to create audio recording task");
-        while (1);
+        return false;
     }
+    return true;
 }

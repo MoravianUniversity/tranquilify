@@ -13,9 +13,8 @@
 /**
  * Set up the audio codec and I2S for recording audio.
  * Before this is called, the Serial and Wire interfaces must be set up.
- * If there is a problem with the audio setup, the program will freeze.
  */
-void setupAudio();
+bool setupAudio();
 
 /**
  * Set the volume of the audio codec.
