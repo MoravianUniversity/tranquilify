@@ -7,10 +7,15 @@
 #define DISABLE_FS_H_WARNING
 #include <SdFat.h>
 
-const static uint8_t RIFF_BLOCK_ID[] = { 'R', 'I', 'F', 'F' };
-const static uint8_t WAVE_FORMAT_ID[] = { 'W', 'A', 'V', 'E' };
-const static uint8_t FMT_BLOCK_ID[] = { 'f', 'm', 't', ' ' };
-const static uint8_t DATA_BLOCK_ID[] = { 'd', 'a', 't', 'a' };
+#define RIFF_BLOCK_ID { 'R', 'I', 'F', 'F' }
+#define WAVE_FORMAT_ID { 'W', 'A', 'V', 'E' }
+#define FMT_BLOCK_ID { 'f', 'm', 't', ' ' }
+#define DATA_BLOCK_ID { 'd', 'a', 't', 'a' }
+
+const static uint8_t RIFF_BLOCK_ID_CONST[] = RIFF_BLOCK_ID;
+const static uint8_t WAVE_FORMAT_ID_CONST[] = WAVE_FORMAT_ID;
+const static uint8_t FMT_BLOCK_ID_CONST[] = FMT_BLOCK_ID;
+const static uint8_t DATA_BLOCK_ID_CONST[] = FMT_BLOCK_ID;
 
 /** The master header of a RIFF (WAV) file. */
 struct __attribute__((packed)) RiffHeader {
@@ -61,12 +66,12 @@ struct __attribute__((packed)) WavHeader {
 bool startWAVFile(FsFile& file) {
     WavHeader header = {
         .riffHeader = {
-            .fileTypeBlockID = { 'R', 'I', 'F', 'F' },
+            .fileTypeBlockID = RIFF_BLOCK_ID,
             .fileSize = sizeof(WavHeader) - 8, // updated as data is written
-            .fileFormatID = { 'W', 'A', 'V', 'E' },
+            .fileFormatID = WAVE_FORMAT_ID,
         },
         .fmtChunk = {
-            .blockID = { 'f', 'm', 't', ' ' },
+            .blockID = FMT_BLOCK_ID,
             .blockSize = 16,
             .audioFormat = 1, // PCM
             .numChannels = CHANNELS,
@@ -76,7 +81,7 @@ bool startWAVFile(FsFile& file) {
             .bitsPerSample = BITS_PER_SAMPLE,
         },
         .dataChunk = {
-            .blockID = { 'd', 'a', 't', 'a' },
+            .blockID = DATA_BLOCK_ID,
             .blockSize = 0, // updated as data is written
         },
     };
@@ -97,22 +102,23 @@ bool writeAt(FsFile& file, size_t offset, uint32_t data) {
 /**
  * Append the given data to the WAV file. Updates the file and data sizes in the header.
  */
-bool appendWAVData(FsFile& file, uint8_t* data, uint32_t length) {
+size_t appendWAVData(FsFile& file, uint8_t* data, uint32_t length) {
     // Append the data
     size_t cur_size = file.size();
-    if (!file.seek(cur_size)) { Serial.println("!! Failed to seek to end of WAV data"); return false; }
+    if (!file.seek(cur_size)) { Serial.println("!! Failed to seek to end of WAV data"); return 0; }
     size_t written = file.write(data, length);
-    if (written == 0) { Serial.println("!! Failed to write any WAV data"); return false; }
+    if (written == 0) { Serial.println("!! Failed to write any WAV data"); return 0; }
     if (written != length) { Serial.printf("!! Warning: only wrote %llu bytes of WAV data instead of %llu. SD card is probably full\n", written, length); }
 
     // Update sizes in headers
     size_t new_size = cur_size + written;
-    if (!writeAt(file, offsetof(WavHeader, riffHeader.fileSize), new_size - 8)) { Serial.println("!! Failed to write file size in WAV header"); return false; }
-    if (!writeAt(file, offsetof(WavHeader, dataChunk.blockSize), new_size - sizeof(WavHeader))) { Serial.println("!! Failed to write data size in WAV header"); return false; }
+    size_t data_size = new_size - sizeof(WavHeader);
+    if (!writeAt(file, offsetof(WavHeader, riffHeader.fileSize), new_size-8)) { Serial.println("!! Failed to write file size in WAV header"); return 0; }
+    if (!writeAt(file, offsetof(WavHeader, dataChunk.blockSize), data_size)) { Serial.println("!! Failed to write data size in WAV header"); return 0; }
 
     // Flush/sync the file
     file.flush();
-    return true;
+    return data_size;
 }
 
 
@@ -139,11 +145,11 @@ bool readWavHeader(FsFile& file, uint32_t& dataSize) {
     // Read RIFF header
     RiffHeader riffHeader;
     if (file.read((uint8_t*)&riffHeader, sizeof(RiffHeader)) != sizeof(RiffHeader)) { return false; }
-    if (memcmp(riffHeader.fileTypeBlockID, RIFF_BLOCK_ID, 4) != 0 || memcmp(riffHeader.fileFormatID, WAVE_FORMAT_ID, 4) != 0) { return false; }
+    if (memcmp(riffHeader.fileTypeBlockID, RIFF_BLOCK_ID_CONST, 4) != 0 || memcmp(riffHeader.fileFormatID, WAVE_FORMAT_ID_CONST, 4) != 0) { return false; }
 
     // Find the format chunk
     FmtChunk fmtChunk;
-    if (!findChunk(file, FMT_BLOCK_ID, (RiffChunk*)&fmtChunk)) { return false; }
+    if (!findChunk(file, FMT_BLOCK_ID_CONST, (RiffChunk*)&fmtChunk)) { return false; }
     if (fmtChunk.blockSize != sizeof(FmtChunk) - sizeof(RiffChunk)) { return false; }
 
     // Read and check the rest of the format chunk
@@ -153,8 +159,9 @@ bool readWavHeader(FsFile& file, uint32_t& dataSize) {
 
     // Find the data chunk
     RiffChunk dataChunk;
-    if (!findChunk(file, DATA_BLOCK_ID, &dataChunk)) { return false; }
+    if (!findChunk(file, DATA_BLOCK_ID_CONST, &dataChunk)) { return false; }
 
     // Save the data size
     dataSize = dataChunk.blockSize;
+    return true;
 }

@@ -7,6 +7,8 @@
 #include <SdFat.h>
 
 // TODO: make these use general stream classes instead of FsFile so it is more portable?
+// Tried using Stream from Stream.h, but that doesn't have seek(), position(), size(), write(), or flush() functions
+// StreamFile is a template class so can't be used directly...
 
 /**
  * Start a new WAV file with the given file.
@@ -16,8 +18,10 @@ bool startWAVFile(FsFile& file);
 
 /**
  * Append the given data to the WAV file. Updates the file and data sizes in the header.
+ * Returns the total WAV data size in the file after the append (not including the header).
+ * Returns 0 if there was an error.
  */
-bool appendWAVData(FsFile& file, uint8_t* data, uint32_t length);
+size_t appendWAVData(FsFile& file, uint8_t* data, uint32_t length);
 
 /**
  * Read the WAV header from the given file.
