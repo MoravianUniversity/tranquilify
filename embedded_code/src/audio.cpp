@@ -1,5 +1,8 @@
 #include "audio.h"
+#include "sd.h"
 #include "data.h"
+
+#include <math.h> // for sin
 
 #include <Arduino.h> // for Serial and WM8960 library
 
@@ -11,9 +14,8 @@ WM8960 audio_codec;
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-// I2S driver and event queue
+// I2S driver
 #include <driver/i2s.h>
-#include <freertos/queue.h>
 
 // ESP32 Thing Plus C I2S pins/port
 #define I2S_WS        33 // DACLRC/ADCLRC/LRC/"word select"/"left-right-channel", toggles for left or right channel data
@@ -22,52 +24,25 @@ WM8960 audio_codec;
 #define I2S_BCLK      32 // BCLK/SCK/"bit clock", this is the clock for I2S audio, can be controlled via controller or peripheral
 #define I2S_PORT I2S_NUM_0 // Define which I2S peripheral to use
 
-// Audio Recording Buffers
+// Audio Recording Buffers (double buffering)
 #define DMA_BUFFER_SAMPLE_LEN 1024 // from ~64 to 1024 - lower reduces latency but increases overhead (1024 is about 23.2ms of audio)
 #define DMA_BUFFER_BYTE_LEN (DMA_BUFFER_SAMPLE_LEN * BYTES_PER_SAMPLE * CHANNELS) // IMPORTANT: this cannot be > 4096
 static_assert(DMA_BUFFER_BYTE_LEN <= 4096, "DMA buffer size must be <= 4096 bytes");
+#define BUFFER_READ_LEN (DMA_BUFFER_BYTE_LEN) // amount to try to read at once
 #define WAV_BUFFER_LEN (100*BYTES_PER_SAMPLE*CHANNELS*SAMPLE_RATE/1000)  // 100 ms of audio buffered before writing to SD card
-uint8_t readBuffer[WAV_BUFFER_LEN + DMA_BUFFER_BYTE_LEN]; // this will store the data over a larger period and write it all at once
-uint16_t readBufferOffset = 0; // the current offset in the buffer
-
+uint8_t readBuffer1[WAV_BUFFER_LEN + BUFFER_READ_LEN];
+uint8_t readBuffer2[WAV_BUFFER_LEN + BUFFER_READ_LEN];
 
 #define RECORDING_VOLUME 55 // 24db; value from 0-63, maps to -17.25dB to +30.00dB with 0.75dB steps
 
 #define AUDIO_OUTPUT 2 // set to 0 for no audio output (just recording), 1 for loopback, 2 for manual output
 
 
-QueueHandle_t queue = NULL;
-
-/**
- * Read I2S data into data buffer then write it to the SD card every so often.
- */
-void readAudioData() { 
-    // TODO: several questions about i2s_read:
-    //    giving a smaller buffer size (e.g. 64) reduces latency but increases overhead
-    //    giving a small timeout (instead of ininite) could also reduce latency
-    
-    if (queue != NULL) {
-        // TODO: this only seems to work for a little while before it stops working (a total of like 6-8 messages displayed), don't know why
-        i2s_event_t evt;
-        while (xQueueReceive(queue, &evt, 0)) {
-            if (evt.type == I2S_EVENT_DMA_ERROR) {
-                Serial.println("!! I2S DMA error");
-            } else if (evt.type == I2S_EVENT_RX_Q_OVF) {
-                Serial.println("!! I2S Overflow receive buffer");
-            }
-        }
-    }
-
-    size_t bytesRead = 0;
-    esp_err_t result = i2s_read(I2S_PORT, &readBuffer[readBufferOffset], DMA_BUFFER_BYTE_LEN, &bytesRead, portMAX_DELAY);
-    if (result != ESP_OK) { Serial.println("!! I2S read error"); return; }
-    readBufferOffset += bytesRead;
-    if (readBufferOffset >= WAV_BUFFER_LEN) {
-        // Write the buffer to the SD card every so often
-        // TODO: recordWAVData(readBuffer, readBufferOffset);
-        readBufferOffset = 0;
-    }
-}
+#define CHECK_I2S_EVENTS // check for I2S events (errors) in the audioRecordingTask, undefine to disable
+#ifdef CHECK_I2S_EVENTS
+#include <freertos/queue.h>
+QueueHandle_t i2sQueue = NULL;
+#endif
 
 
 /**
@@ -75,10 +50,63 @@ void readAudioData() {
  * while also writing audio data back to the I2S bus for playback.
  */
 void audioRecordingTask(void *pvParameters) {
+    uint8_t* buffer = readBuffer1; // the current buffer being read into (switches between readBuffer1 and readBuffer2 for double buffering)
+    uint16_t offset = 0; // the current offset in the buffer
+    // We only allow one write at a time, so we can use a single instance of the params
+    WriteWAVParams params = { .writing = false };
+
     while (true) {
-        readAudioData();
+#ifdef CHECK_I2S_EVENTS
+        // Check for I2S events (errors)
+        if (i2sQueue) {
+            // TODO: this only seems to work for a little while before it stops working (a total of like 6-8 messages displayed), don't know why
+            i2s_event_t evt;
+            while (xQueueReceive(i2sQueue, &evt, 0)) {
+                if (evt.type == I2S_EVENT_DMA_ERROR) {
+                    Serial.println("!! I2S DMA error");
+                } else if (evt.type == I2S_EVENT_RX_Q_OVF) {
+                    Serial.println("!! I2S Overflow receive buffer");
+                } else if (evt.type == I2S_EVENT_TX_Q_OVF) {
+                    Serial.println("!! I2S Overflow transmit buffer");
+                // } else if (evt.type == I2S_EVENT_RX_DONE) {
+                //     Serial.println("-- I2S Received");
+                // } else if (evt.type == I2S_EVENT_TX_DONE) {
+                //     Serial.println("-- I2S Transmitted");
+                }
+            }
+        }
+#endif
+
+        // Read audio data from the I2S bus
+        // TODO: several questions about i2s_read:
+        //    giving a smaller buffer size (e.g. 64) reduces latency but increases overhead
+        //    giving a small timeout (instead of infinite) could also reduce latency
+        size_t bytesRead = 0;
+        esp_err_t result = i2s_read(I2S_PORT, &buffer[offset], BUFFER_READ_LEN, &bytesRead, portMAX_DELAY);
+        if (result != ESP_OK) { Serial.println("!! I2S read error"); continue; }
+        offset += bytesRead;
+
+        // Write the buffer to the SD card every so often
+        if (offset >= WAV_BUFFER_LEN) {
+            if (params.writing) { Serial.println("!! Audio writing is too slow"); }
+
+            // Write the filled buffer to the SD card
+            params.buffer = buffer;
+            params.length = offset;
+            params.writing = true;
+            submitSDTask((SDCallback)writeWAVData, &params);
+
+            // Swap the buffers
+            buffer = (buffer == readBuffer1) ? readBuffer2 : readBuffer1;
+            offset = 0;
+
+            // TODO: remove this debug print
+            Serial.printf("Audio Recording High watermark: %u\n", uxTaskGetStackHighWaterMark(NULL));
+        }
+
         yield();
     }
+
     vTaskDelete(NULL);
 }
 
@@ -288,7 +316,12 @@ bool i2s_install() {
         .mclk_multiple = I2S_MCLK_MULTIPLE_DEFAULT,  // TODO: 512?
         .bits_per_chan = I2S_BITS_PER_CHAN_DEFAULT,
     };
-    if (i2s_driver_install(I2S_PORT, &i2s_config, 4, &queue) != ESP_OK) { Serial.println("!! i2s_driver_install()"); return false; }
+#ifdef CHECK_I2S_EVENTS
+#define QUEUE_ARG 4, &i2sQueue
+#else
+#define QUEUE_ARG 0, NULL
+#endif
+    if (i2s_driver_install(I2S_PORT, &i2s_config, QUEUE_ARG) != ESP_OK) { Serial.println("!! i2s_driver_install()"); return false; }
     return true;
 
     //i2s_set_clk(I2S_PORT, SAMPLE_RATE, BITS_PER_SAMPLE, I2S_CHANNEL_STEREO);
