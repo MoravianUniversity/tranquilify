@@ -2,7 +2,7 @@
 
 
 /** Set up the settings for the program. Settings are persistently stored in SPIFFS. */
-void setupSettings();
+bool setupSettings();
 
 
 ///// Counter /////

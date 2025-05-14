@@ -4,8 +4,9 @@
 #include <FS.h>
 
 /** Set up the settings for the program. Settings are persistently stored in SPIFFS. */
-void setupSettings() {
-    if (!SPIFFS.begin(true)) { Serial.println("!! SPIFFS Mount failed!"); }
+bool setupSettings() {
+    if (!SPIFFS.begin(true)) { Serial.println("!! SPIFFS Mount failed!"); return false; }
+    return true;
 }
 
 
