@@ -6,10 +6,6 @@
 #define DISABLE_FS_H_WARNING
 #include <SdFat.h>
 
-// TODO: make these use general stream classes instead of FsFile so it is more portable?
-// Tried using Stream from Stream.h, but that doesn't have seek(), position(), size(), write(), or flush() functions
-// StreamFile is a template class so can't be used directly...
-
 /**
  * Start a new WAV file with the given file.
  * Writes the minimal header to the file.
