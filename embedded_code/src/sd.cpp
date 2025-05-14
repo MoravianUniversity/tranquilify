@@ -17,8 +17,17 @@
 #define SD_MOSI 23
 #define SD_CS   5     // Thing Plus C
 
-// The Thing Plus doesn't connect the SD card DET pin, so we can't auto-detect removals/insertions
-// We could solder a wire to it (small notch near "SHLD") and connect that to a GPIO pin
+
+// SD card readers have a DET pin do auto-detect removals/insertions
+// This isn't always wired up on the board, so we make it optional
+// On Thing Plus C, can solder a wire to it (small notch near "SHLD") and connect it to a GPIO
+//#define USE_DETECT_PIN
+#ifdef USE_DETECT_PIN
+// TODO: test all of the detect pin stuff
+// TODO: actually do something useful with the detect pin (like closing files) - need interrupts for that
+#define SD_DETECT_PIN ???
+#define SD_DETECT_PIN_MODE INPUT_PULLUP  // or INPUT_PULLDOWN?
+#endif
 
 #define SPI_SPEED SD_SCK_MHZ(30)  // best speed is 50 but >30 doesn't work/make a difference
 #define SD_CONFIG SdSpiConfig(SD_CS, DEDICATED_SPI, SPI_SPEED)
@@ -55,7 +64,15 @@ bool setupSDCard() {
         Serial.println("!! setupSDCard() called from wrong task");
         return false;
     }
-    Serial.println("Setting up SD card...");
+#endif
+
+#ifdef USE_DETECT_PIN
+    if (!digitalRead(SD_DETECT_PIN)) {
+        #ifdef DEBUG
+        Serial.println("!! SD card not detected");
+        #endif
+        return false;
+    }
 #endif
 
     // Make sure the SD card is not already initialized
@@ -156,6 +173,10 @@ bool setupSD() {
         Serial.println("!! Failed to create SD card task");
         return false;
     }
+
+    #ifdef USE_DETECT_PIN
+    pinMode(SD_DETECT_PIN, SD_DETECT_PIN_MODE);
+    #endif
 
     return true;
 }
