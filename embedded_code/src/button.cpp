@@ -8,7 +8,7 @@
 #include <Arduino.h> // for millis, pinMode, attachInterrupt, digitalPinToInterrupt, ...
 
 // The button pin
-// While this code does do some debouncing, it is assumed there is a hardware debouncing circuit (e.g. a capacitor)
+// This code does some debouncing, it assumes there is hardware debouncing (e.g. a capacitor)
 // The button will be set up to be pulled low
 #define BUTTON_PIN 4 // GPIO4
 
@@ -18,18 +18,16 @@
 #else
 #define BUTTON_REG GPIO_IN1_REG
 #endif
-#define READ_BUTTON() (REG_READ(BUTTON_REG) & (1 << BUTTON_PIN)) // read the button pin (without shift)
+#define READ_BUTTON() (REG_READ(BUTTON_REG) & (1 << BUTTON_PIN)) // read button pin (without shift)
 
 // The current button state (used in the interrupt handlers)
-unsigned long IRAM_DATA_ATTR WORD_ALIGNED_ATTR lastPress = 0;  // when 0 means not currently pressed
+unsigned long IRAM_DATA_ATTR WORD_ALIGNED_ATTR lastPress = 0;  // when 0 not currently pressed
 unsigned long IRAM_DATA_ATTR WORD_ALIGNED_ATTR lastRelease = 0;
 
 
 /** Record button press into the global variables (with some debouncing). */
 void IRAM_ATTR onPress() {
-    //Serial.printf("%d Button pressed (%s)\n", millis(), READ_BUTTON ? "HIGH" : "LOW");
-
-    // if already pressed, ignore it (unless it's been 10 seconds which means we missed the release...)
+    // if already pressed, ignore it (unless it's been 10 secs which means we missed the release)
     unsigned long now = millis();
     if (lastPress > 0 && now - lastPress < 10000) { return; }
     // if too short of a press, ignore it (debounce)
@@ -44,23 +42,17 @@ void IRAM_ATTR onPress() {
  * Add the button press and release times to the button queue.
  */
 void IRAM_ATTR onRelease() {
-    //Serial.printf("%d Button released (%s)\n", millis(), READ_BUTTON ? "HIGH" : "LOW");
-
     if (lastPress == 0) { return; }
     lastRelease = millis();
 
-#ifdef DEBUG
-    Serial.printf("Button pressed for %lu ms (from %lu to %lu)\n", lastRelease - lastPress, lastPress, lastRelease);
-#endif
-
-    // Write the button press and release times to the file
+    // Write the button press and release times to the file (using a task)
     static ButtonEvent events[MAX_FILE_TASKS];
     static unsigned char index = 0;
     events[index].pressTime = lastPress;
     events[index].releaseTime = lastRelease;
     submitSDTaskFromISR((SDCallback)writeButtonData, &events[index]);
     index = (index + 1) % MAX_FILE_TASKS;
-    
+
     lastPress = 0;
 }
 
