@@ -11,10 +11,33 @@
 #define OPTIMIZE_FOR_SPEED __attribute__((optimize("Ofast")))
 
 
-#include <dsp_common.h>
-#define is_power_of_two(x) dsp_is_power_of_two(x)
-inline static bool OPTIMIZE_FOR_SPEED is_power_of_four_given_is_pow_2(int n) { return (n & 0xAAAAAAAA) == 0; }  // assuming n is a power of 2, checks if it is also a power of 4
-inline static bool OPTIMIZE_FOR_SPEED is_power_of_four(int n) { return is_power_of_two(n) && is_power_of_four_given_is_pow_2(n); }
+//////////////////////////////////////////////////
+////////// Integer/Float Bit Conversion //////////
+//////////////////////////////////////////////////
+static inline __attribute__((always_inline)) float OPTIMIZE_FOR_SPEED bits_to_float(int32_t x) {
+    union { int32_t i; float f; } u = {x};
+    return u.f;
+}
+static inline __attribute__((always_inline)) float OPTIMIZE_FOR_SPEED bits_to_float(uint32_t x) {
+    union { uint32_t i; float f; } u = {x};
+    return u.f;
+}
+static inline __attribute__((always_inline)) int32_t OPTIMIZE_FOR_SPEED bits_to_int(float x) {
+    union { float f; int32_t i; } u = {x};
+    return u.i;
+}
+static inline __attribute__((always_inline)) uint32_t OPTIMIZE_FOR_SPEED bits_to_uint(float x) {
+    union { float f; uint32_t i; } u = {x};
+    return u.i;
+}
+
+
+/////////////////////////////////////////
+////////// Integer Power Check //////////
+/////////////////////////////////////////
+static inline __attribute__((always_inline)) bool OPTIMIZE_FOR_SPEED is_power_of_two(int x) { return (x != 0) && ((x & (x - 1)) == 0); }  // or dsp_is_power_of_two() from dsp_common.h
+static inline __attribute__((always_inline)) bool OPTIMIZE_FOR_SPEED is_power_of_four_given_is_pow_2(int n) { return (n & 0xAAAAAAAA) == 0; }  // assuming n is a power of 2, checks if it is also a power of 4
+static inline __attribute__((always_inline)) bool OPTIMIZE_FOR_SPEED is_power_of_four(int n) { return is_power_of_two(n) && is_power_of_four_given_is_pow_2(n); }
 
 
 //////////////////////////////
@@ -66,13 +89,99 @@ float recip(float x) { return 1.0f / x; }
 /////////////////////////////////
 ////////// Square Root //////////
 /////////////////////////////////
-// Approximate square root and inverse square root functions
-// Much faster but not as accurate as the standard library functions
-// TODO: maybe use InvSqrt43 from https://www.researchgate.net/publication/349173096_SIMPLE_EFFECTIVE_FAST_INVERSE_SQUARE_ROOT_ALGORITHM_WITH_TWO_MAGIC_CONSTANTS
-//  which is tested on the ESP32, fully accurate, and as fast as possible
-#include <dsps_sqrt.h> // for square root and inv square root approximation
-#define sqrt_fast(x) dsps_sqrtf_f32(x)  // approximate square root
-#define recip_sqrt_fast(x) dsps_inverted_sqrtf_f32(x)  // approximate inverse square root (much closer than the sqrt approximation)
+/**
+ * Approximate inverse square root function.
+ * This is the `InvSqrt43()` function from https://www.researchgate.net/publication/349173096_SIMPLE_EFFECTIVE_FAST_INVERSE_SQUARE_ROOT_ALGORITHM_WITH_TWO_MAGIC_CONSTANTS
+ * This has 21.21 bits of accuracy and costs 281.2 ns on the ESP32 (2.85x faster
+ * than `1/sqrt(x)` which has an accuracy of 23.42 bits and costs 801.5 ns).
+ * 
+ * The `dsps_inverted_sqrtf_f32()` function from `dsps_sqrt.h` has ~9 bits
+ * of accuracy and costs ~200ns (5 multiplactions instead of 8).
+ */
+inline static float OPTIMIZE_FOR_SPEED recip_sqrt_fast(float x) {
+    int i = bits_to_int(x);
+    int ix = i - 0x80800000;
+    i = i >> 1;
+    int ii = 0x5E5FB3E2 - i;
+    i = 0x5F5FB3E2 - i;
+    float y = bits_to_float(i);
+    float yy = bits_to_float(ii);
+    y = yy*(4.76424932f - x*y*y);
+    float mhalf = bits_to_float(ix);
+    float t = fmaf(mhalf, y*y, 0.500000298f);
+    return fmaf(y, t, y);
+}
+
+/**
+ * Approximate square root function based on the fact that `sqrt(x) = x * (1/sqrt(x))`
+ * and we can compute the inverse square root fast and accurately using the
+ * `recip_sqrt_fast()` function.
+ * 
+ * Compared to sqrt(x), this is ~1.4x faster (266 ns vs 365 ns), has a max
+ * relative error of ~3.58e-5% (14.8 bits of accuracy), and on average it is
+ * equal.
+ */
+inline static float OPTIMIZE_FOR_SPEED sqrt_fast(float x) {
+    return x * recip_sqrt_fast(x);
+
+    // `dsps_sqrtf_f32()` version - extremely inaccurate (max 3.5% error
+    // [4.8 bits] and 0.2% average error) but very fast (only 106 ns).
+    //return bits_to_float(0x1fbb4000 + (bits_to_int(f) >> 1));
+}
+
+/* Testing Code
+    #include "esp32/clk.h"
+    #define CPU_FREQ 240000.0 // ESP32 CPU frequency in 1/ms
+    #include "esp_math.h"
+    #include "bootloader_random.h"
+
+    bootloader_random_enable();
+    srand(esp_random());
+    bootloader_random_disable();
+
+    esp_cpu_ccount_t start, end, diff;
+
+    float* xs = (float*)malloc(10000 * sizeof(float));
+    float* ys = (float*)malloc(10000 * sizeof(float));
+    for (int i = 0; i < 10000; i++) { xs[i] = random() / (float)RAND_MAX * 200; }
+
+    start = esp_cpu_get_ccount();
+    for (int i = 0; i < 10000; i++) { ys[i] = sqrt(xs[i]); }
+    end = esp_cpu_get_ccount();
+    diff = end - start;
+    total += diff;
+    Serial.printf("sqrt() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+
+    start = esp_cpu_get_ccount();
+    for (int i = 0; i < 10000; i++) { ys[i] = sqrt_fast(xs[i]); }
+    end = esp_cpu_get_ccount();
+    diff = end - start;
+    total += diff;
+    Serial.printf("sqrt_fast() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    float total_err = 0;
+    float max_err = 0;
+    for (int i = 0; i < 10000; i++) {
+        float err = fabs(ys[i] / sqrt(xs[i]));
+        total_err += err;
+        if (err > max_err) max_err = err;
+    }
+    Serial.printf("sqrt_fast() max rel error: %0.9f, avg rel error: %0.9f\n", max_err, total_err / 10000.0);
+
+    start = esp_cpu_get_ccount();
+    for (int i = 0; i < 10000; i++) { ys[i] = sqrt_fast_2(xs[i]); }
+    end = esp_cpu_get_ccount();
+    diff = end - start;
+    total += diff;
+    Serial.printf("sqrt_fast_2() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    total_err = 0;
+    max_err = 0;
+    for (int i = 0; i < 10000; i++) {
+        float err = fabs(ys[i] / sqrt(xs[i]));
+        total_err += err;
+        if (err > max_err) max_err = err;
+    }
+    Serial.printf("sqrt_fast_2() max rel error: %0.9f, avg rel error: %0.9f\n", max_err, total_err / 10000.0);
+*/
 
 
 //////////////////////////////
@@ -86,13 +195,9 @@ float recip(float x) { return 1.0f / x; }
  */
 static float OPTIMIZE_FOR_SPEED exp_fast_o2(float x) {
     float xb = x * 12102203;
-    int ib = (int)xb;
-    int ir = ib + (127 << 23) - 345088;
-    float first_order = *(float*)&ir;
-
-    int correction_xi = (ir & 0x7fffff) | (127 << 23);
-    float correction_x = *(float*)&correction_xi;
-
+    int32_t ir = ((int32_t)xb) + (127 << 23) - 345088;
+    float first_order = bits_to_float(ir);
+    float correction_x = bits_to_float((ir & 0x7fffff) | (127 << 23));
     float correction = fmaf(correction_x, 0.22670517861843109130859375f, -0.671999752521514892578125f);
     correction = fmaf(correction, correction_x, 1.469318866729736328125f);
     return first_order * correction;
@@ -107,7 +212,7 @@ static float OPTIMIZE_FOR_SPEED exp_fast_o2(float x) {
 static float OPTIMIZE_FOR_SPEED exp_fast_o1(float x) {
     float xb = x * 12102203;
     int i = ((int)xb) + 1064986823;
-    return *(float*)(&i);
+    return bits_to_float(i);
 }
 
 /* Testing Code
@@ -408,18 +513,18 @@ static void OPTIMIZE_FOR_SPEED sincos_fast(float degrees, float *sine, float *co
 typedef float _Complex cfloat;
 
 /** Computes cabsf(x)^2, avoiding the sqrtf call. */
-static inline OPTIMIZE_FOR_SPEED float cabs2(cfloat x) { return crealf(x) * crealf(x) + cimagf(x) * cimagf(x); }
+static inline __attribute__((always_inline)) OPTIMIZE_FOR_SPEED float cabs2(cfloat x) { return crealf(x) * crealf(x) + cimagf(x) * cimagf(x); }
 
 /** Computes cargf(x) using fast atan2(). */
 // TODO: tried d9 version but it was slower than using atanf() directly here?
-static inline OPTIMIZE_FOR_SPEED float carg_fast(cfloat x) { return atan2_fast_d7(cimagf(x), crealf(x)); }
+static inline __attribute__((always_inline)) OPTIMIZE_FOR_SPEED float carg_fast(cfloat x) { return atan2_fast_d7(cimagf(x), crealf(x)); }
 
 /**
  * Computes the imaginary exponential of x using fast trigronometry functions:
  *       iexp_fast(x) = cos(x) + i*sin(x)
  * See cexp_fast() for using any complex number.
  */
-static inline OPTIMIZE_FOR_SPEED cfloat iexp_fast(float x) {
+static inline __attribute__((always_inline)) OPTIMIZE_FOR_SPEED cfloat iexp_fast(float x) {
     //return cos(x) + I * sin(x);
     float real, imag;
     sincos_fast(x * (180.0f / PI_), &imag, &real);
@@ -432,4 +537,4 @@ static inline OPTIMIZE_FOR_SPEED cfloat iexp_fast(float x) {
  * This is faster than using the standard cexpf() function. This uses the
  * order-1 exp() function.
  */
-//static inline OPTIMIZE_FOR_SPEED cfloat cexp_fast(cfloat x) { return exp_fast_o1(crealf(x)) * iexp_fast(cimagf(x)); }
+//static inline __attribute__((always_inline)) OPTIMIZE_FOR_SPEED cfloat cexp_fast(cfloat x) { return exp_fast_o1(crealf(x)) * iexp_fast(cimagf(x)); }
