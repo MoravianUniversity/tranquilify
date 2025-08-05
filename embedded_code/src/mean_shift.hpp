@@ -209,7 +209,7 @@ public:
             if (counts[i] >= min_count) {
                 // Convert the linear index back to coordinates
                 seeds.emplace_back();
-                hist_index_to_point(i, seeds.back());
+                index_to_point(i, seeds.back());
             }
         }
     }
@@ -235,11 +235,12 @@ public:
         const std::vector<float>& weights,
         std::vector<point_t>& centroids
     ) {
+        bool mask[centroids.size()] = {false};
+
+        // TODO: use a finer grid than the histogram to increase accuracy
         std::conditional_t<grid_filtering, uint8_t[hist_size], uint8_t> grid;
-        bool mask[centroids.size()];
         if (grid_filtering) {
             assert(centroids.size() <= 255);  // grid filtering only works with at most 255 centroids
-            memset(mask, 0x00, sizeof(mask));
             memset(grid, 0xFF, sizeof(grid));
         }
 
@@ -248,7 +249,7 @@ public:
             bool not_converged;
             do {
                 if (grid_filtering) {
-                    int grid_index = point_to_hist_index(centroid);
+                    int grid_index = point_to_index(centroid);
                     if (assume_in_bounds || grid_index >= 0) { // no grid-filtering if the point is out of bounds, wait until the point is in bounds
                         if (grid[grid_index] == 0xFF) {
                             grid[grid_index] = c;
@@ -307,16 +308,19 @@ public:
             centroids.resize(p);
         } else {
             // Combine all centroids that are close to each other
-            remove_near_duplicates(centroids);
+            remove_near_duplicates(centroids, mask);
         }
     }
 
 private:
     /**
      * Remove points that are within a certain tolerance of each other.
+     * 
+     * The passed masks are used to skip points that should be ignored when
+     * true. It is also used during processing and all points will be masked
+     * once this function returns.
      */
-    static void remove_near_duplicates(std::vector<point_t>& points) {
-        bool mask[points.size()] = {false};  // which centroids have been processed
+    static void remove_near_duplicates(std::vector<point_t>& points, bool* mask) {
         int m = 0;
         for (int i = 0; i < points.size(); i++) {
             if (mask[i]) { continue; }  // skip points that have already been processed
@@ -349,31 +353,38 @@ private:
     }
 
     /**
-     * Convert a point in n-dimensional space to a linear index in the
-     * histogram. Returns -1 if the point is out of bounds.
+     * Convert a point in n-dimensional space to a linear index.
+     * Returns -1 if the point is out of bounds.
      */
-    static int point_to_hist_index(const point_t& point) {
+    static int point_to_index(
+        const point_t& point,
+        const std::array<int16_t, dim>& shape = hist_shape,
+        const point_t& min_bounds = min_bounds
+    ) {
         int index = 0;
         for (int d = 0; d < dim; d++) {
             // Convert the the point value to an integer coordinate in the bin grid
             int x = (int)round((point[d] - min_bounds[d]) * _get(bin_size_inv, d));
             // Check if the point is out of bounds
-            if (assume_in_bounds) { assert(x >= 0 && x < hist_shape[d]); }
-            else if (x < 0 || x >= hist_shape[d]) { return -1; }
+            if (assume_in_bounds) { assert(x >= 0 && x < shape[d]); }
+            else if (x < 0 || x >= shape[d]) { return -1; }
             // Convert the integer coordinate to a linear index in the histogram
-            index = index * hist_shape[d] + x;
+            index = index * shape[d] + x;
         }
         return index;
     }
 
     /**
-     * Convert a linear index in the histogram to a point in n-dimensional
-     * space.
+     * Convert a linear index to a point in n-dimensional space.
      */
-    static void hist_index_to_point(int index, point_t& point) {
+    static void index_to_point(
+        int index, point_t& point,
+        const std::array<int16_t, dim>& shape = hist_shape,
+        const point_t& min_bounds = min_bounds
+    ) {
         for (int d = dim - 1; d > 0; d--) {
-            point[d] = (index % hist_shape[d]) * _get(bandwidth, d) + min_bounds[d];
-            index /= hist_shape[d];
+            point[d] = (index % shape[d]) * _get(bandwidth, d) + min_bounds[d];
+            index /= shape[d];
         }
         point[0] = index * _get(bandwidth, 0) + min_bounds[0];
     }
@@ -387,7 +398,7 @@ private:
     ) {
         memset(counts, 0, hist_size * sizeof(int));  // TODO: use dsps_memset()
         for (const point_t & pt : points) {
-            int index = point_to_hist_index(pt);
+            int index = point_to_index(pt);
             // If the point is in bounds, increment the count in the histogram
             if (assume_in_bounds || index >= 0) { counts[index] += 1; }
         }
