@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <Arduino.h> // for analogRead() and Serial
+#include <Arduino.h> // for analogRead()
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -67,13 +67,13 @@ void adjustVolumeTask(void* pvParameters) {
         // If the volume has changed, update the audio codec
         if (volume != prevVolume) {
             setVolume(volume);
-            //Serial.printf("Volume:  %03x  %02x  %d dB\n", total/NUM_OF_VOL_READINGS, volume, (int)volume - 73);
+            //printf("Volume:  %03x  %02x  %d dB\n", total/NUM_OF_VOL_READINGS, volume, (int)volume - 73);
         }
         prevVolume = volume;
 
         vTaskDelay(VOL_READING_DELAY / portTICK_PERIOD_MS);
 
-        // Serial.printf("Volume Monitor Task: %d\n", uxTaskGetStackHighWaterMark(NULL));
+        // printf("Volume Monitor Task: %d\n", uxTaskGetStackHighWaterMark(NULL));
     }
 
     vTaskDelete(NULL);
@@ -86,10 +86,10 @@ void adjustVolumeTask(void* pvParameters) {
  * The return value indicates if the task was successfully created.
  */
 bool setupVolumeMonitor() {
-    // A stack size of 1024 was just barely too small (could do a Serial.printf() but not setVolume())
+    // A stack size of 1024 was just barely too small (could do a printf() but not setVolume())
     // With +80, the high water mark is 40, indicating +40 should be sufficient, but reducing to +72 becomes too small
-    if (xTaskCreate(adjustVolumeTask, "AdjustVolume", 1024+80, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
-        Serial.println("!! Failed to create the adjust volume task");
+    if (xTaskCreate(adjustVolumeTask, "AdjustVolume", 1024+80+48, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
+        printf("!! Failed to create the adjust volume task\n");
         return false;
     }
     return true;
