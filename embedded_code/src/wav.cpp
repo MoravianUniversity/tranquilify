@@ -74,11 +74,11 @@ bool startWAVFile(FsFile& file) {
             .blockID = FMT_BLOCK_ID,
             .blockSize = 16,
             .audioFormat = 1, // PCM
-            .numChannels = CHANNELS,
-            .sampleRate = SAMPLE_RATE,
-            .byteRate = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE,
-            .bytePerBlock = CHANNELS * BYTES_PER_SAMPLE,
-            .bitsPerSample = BITS_PER_SAMPLE,
+            .numChannels = REC_CHANNELS,
+            .sampleRate = REC_SAMPLE_RATE,
+            .byteRate = REC_SAMPLE_RATE * REC_CHANNELS * REC_BYTES_PER_SAMPLE,
+            .bytePerBlock = REC_CHANNELS * REC_BYTES_PER_SAMPLE,
+            .bitsPerSample = REC_BITS_PER_SAMPLE,
         },
         .dataChunk = {
             .blockID = DATA_BLOCK_ID,
@@ -155,7 +155,7 @@ bool readWavHeader(FsFile& file, uint32_t& dataSize) {
     // Read and check the rest of the format chunk
     if (file.read(((uint8_t*)&fmtChunk) + sizeof(RiffChunk), sizeof(FmtChunk) - sizeof(RiffChunk)) != sizeof(FmtChunk) - sizeof(RiffChunk)) { return false; }
     if (fmtChunk.byteRate != fmtChunk.sampleRate * fmtChunk.numChannels * fmtChunk.bitsPerSample / 8 || fmtChunk.bytePerBlock != fmtChunk.numChannels * fmtChunk.bitsPerSample / 8) { return false; }
-    if (fmtChunk.audioFormat != 1 || fmtChunk.numChannels != CHANNELS || fmtChunk.sampleRate != SAMPLE_RATE || fmtChunk.bitsPerSample != BITS_PER_SAMPLE) { return false; }
+    if (fmtChunk.audioFormat != 1 || fmtChunk.numChannels != PLAY_CHANNELS || fmtChunk.sampleRate != PLAY_SAMPLE_RATE || fmtChunk.bitsPerSample != PLAY_BITS_PER_SAMPLE) { return false; }
 
     // Find the data chunk
     RiffChunk dataChunk;

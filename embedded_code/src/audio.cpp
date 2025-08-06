@@ -1,14 +1,9 @@
 #include "audio.h"
 #include "sd.h"
 #include "data.h"
+#include "audio_codec.hpp"
 
 #include <math.h> // for sin
-
-#include <Arduino.h> // for Serial and WM8960 library
-
-// WM8960 audio codec board
-#include <SparkFun_WM8960_Arduino_Library.h>
-WM8960 audio_codec;
 
 // Background task
 #include <freertos/FreeRTOS.h>
@@ -17,25 +12,25 @@ WM8960 audio_codec;
 // I2S driver
 #include <driver/i2s.h>
 
-// ESP32 Thing Plus C I2S pins/port
+// I2S pins/port
 #define I2S_WS        33 // DACLRC/ADCLRC/LRC/"word select"/"left-right-channel", toggles for left or right channel data
-#define I2S_ADC_DATA  27 // ADC_DATA/SD/"serial data in", carries the I2S audio data from codec's ADC to ESP32 I2S bus
-#define I2S_DAC_DATA  14 // DAC_DATA/SDO/"serial data out", carries the I2S audio data from ESP32 to codec DAC
-#define I2S_BCLK      32 // BCLK/SCK/"bit clock", this is the clock for I2S audio, can be controlled via controller or peripheral
+#define I2S_ADC_DATA  14 // ADC_DATA/SD/"serial data in", carries the I2S audio data from codec's ADC to ESP32 I2S bus
+#define I2S_DAC_DATA  32 // DAC_DATA/SDO/"serial data out", carries the I2S audio data from ESP32 to codec DAC
+#define I2S_BCLK      27 // BCLK/SCK/"bit clock", this is the clock for I2S audio, can be controlled via controller or peripheral
 #define I2S_PORT I2S_NUM_0 // Define which I2S peripheral to use
 
 // Audio Recording Buffers (double buffering)
 #define DMA_BUFFER_SAMPLE_LEN 1024 // from ~64 to 1024 - lower reduces latency but increases overhead (1024 is about 23.2ms of audio)
-#define DMA_BUFFER_BYTE_LEN (DMA_BUFFER_SAMPLE_LEN * BYTES_PER_SAMPLE * CHANNELS) // IMPORTANT: this cannot be > 4096
+#define DMA_BUFFER_BYTE_LEN (DMA_BUFFER_SAMPLE_LEN * REC_BYTES_PER_SAMPLE * REC_CHANNELS) // IMPORTANT: this cannot be > 4096
 static_assert(DMA_BUFFER_BYTE_LEN <= 4096, "DMA buffer size must be <= 4096 bytes");
 #define BUFFER_READ_LEN (DMA_BUFFER_BYTE_LEN) // amount to try to read at once
-#define WAV_BUFFER_LEN (100*BYTES_PER_SAMPLE*CHANNELS*SAMPLE_RATE/1000)  // 100 ms of audio buffered before writing to SD card
+#define WAV_BUFFER_LEN (100*REC_BYTES_PER_SAMPLE*REC_CHANNELS*REC_SAMPLE_RATE/1000)  // ~100 ms of audio buffered before writing to SD card
 uint8_t readBuffer1[WAV_BUFFER_LEN + BUFFER_READ_LEN];
 uint8_t readBuffer2[WAV_BUFFER_LEN + BUFFER_READ_LEN];
+uint8_t writeBuffer[WAV_BUFFER_LEN + BUFFER_READ_LEN];
 
-#define RECORDING_VOLUME 55 // 24db; value from 0-63, maps to -17.25dB to +30.00dB with 0.75dB steps
 
-#define AUDIO_OUTPUT 2 // set to 0 for no audio output (just recording), 1 for loopback, 2 for manual output
+AudioCodec* audio_codec; // the audio codec object
 
 
 #define CHECK_I2S_EVENTS // check for I2S events (errors) in the audioRecordingTask, undefine to disable
@@ -44,6 +39,20 @@ uint8_t readBuffer2[WAV_BUFFER_LEN + BUFFER_READ_LEN];
 QueueHandle_t i2sQueue = NULL;
 #endif
 
+
+void lowPassFilterGivenChannel(int16_t *samples, size_t numSamples, int channel, float alpha) {
+    static float prev[REC_CHANNELS] = { 0.0f, 0.0f }; // filter values for each channel
+    for (size_t i = channel; i < numSamples; i += REC_CHANNELS) {
+        prev[channel] = alpha * samples[i] + (1 - alpha) * prev[channel];
+        samples[i] = (int16_t)prev[channel];
+    }
+}
+
+void lowPassFilter(uint8_t *data, size_t dataSize, float alpha) {
+    int16_t *samples = (int16_t *)data;
+    size_t numSamples = dataSize / sizeof(int16_t);
+    for (int ch = 0; ch < REC_CHANNELS; ++ch) { lowPassFilterGivenChannel(samples, numSamples, ch, alpha); }
+}
 
 /**
  * Permanent task that continually reads audio data from the I2S bus and write it to the SD card
@@ -59,19 +68,18 @@ void audioRecordingTask(void *pvParameters) {
 #ifdef CHECK_I2S_EVENTS
         // Check for I2S events (errors)
         if (i2sQueue) {
-            // TODO: this only seems to work for a little while before it stops working (a total of like 6-8 messages displayed), don't know why
             i2s_event_t evt;
             while (xQueueReceive(i2sQueue, &evt, 0)) {
                 if (evt.type == I2S_EVENT_DMA_ERROR) {
-                    Serial.println("!! I2S DMA error");
+                    printf("!! I2S DMA error\n");
                 } else if (evt.type == I2S_EVENT_RX_Q_OVF) {
-                    Serial.println("!! I2S Overflow receive buffer");
+                    printf("!! I2S Overflow receive buffer\n");
                 } else if (evt.type == I2S_EVENT_TX_Q_OVF) {
-                    Serial.println("!! I2S Overflow transmit buffer");
+                    printf("!! I2S Overflow transmit buffer\n");
                 // } else if (evt.type == I2S_EVENT_RX_DONE) {
-                //     Serial.println("-- I2S Received");
+                //     printf("-- I2S Received\n");
                 // } else if (evt.type == I2S_EVENT_TX_DONE) {
-                //     Serial.println("-- I2S Transmitted");
+                //     printf("-- I2S Transmitted\n");
                 }
             }
         }
@@ -83,25 +91,40 @@ void audioRecordingTask(void *pvParameters) {
         //    giving a small timeout (instead of infinite) could also reduce latency
         size_t bytesRead = 0;
         esp_err_t result = i2s_read(I2S_PORT, &buffer[offset], BUFFER_READ_LEN, &bytesRead, portMAX_DELAY);
-        if (result != ESP_OK) { Serial.println("!! I2S read error"); continue; }
-        offset += bytesRead;
+        if (result != ESP_OK) { printf("!! I2S read error\n"); continue; }
+        //offset += bytesRead;
+    
+        int16_t min = 0, max = 0;
+        for (int i = 0; i < bytesRead / REC_BYTES_PER_SAMPLE; i++) {
+            int16_t sample = ((int16_t*)buffer)[i + offset / REC_BYTES_PER_SAMPLE];
+            if (sample < min) min = sample;
+            if (sample > max) max = sample;
+        }
+        printf("Audio sample read: %d bytes, offset: %d\n", bytesRead, offset);
+        printf("Audio sample range: %d to %d\n", min, max);
+
+        memcpy(writeBuffer, &buffer[offset], bytesRead);
+        lowPassFilter(writeBuffer, bytesRead, 0.05, REC_CHANNELS);
+
+        //vTaskDelay(40 / portTICK_PERIOD_MS); // delay for 10 ms to allow other tasks to run
+        sendAudioToI2S(writeBuffer, bytesRead); // send the audio data to the I2S bus for playback
 
         // Write the buffer to the SD card every so often
         if (offset >= WAV_BUFFER_LEN) {
-            if (params.writing) { Serial.println("!! Audio writing is too slow"); }
+            // if (params.writing) { printf("!! Audio writing is too slow\n"); }
 
-            // Write the filled buffer to the SD card
-            params.buffer = buffer;
-            params.length = offset;
-            params.writing = true;
-            submitSDTask((SDCallback)writeWAVData, &params);
+            // // Write the filled buffer to the SD card
+            // params.buffer = buffer;
+            // params.length = offset;
+            // params.writing = true;
+            // submitSDTask((SDCallback)writeWAVData, &params);
 
-            // Swap the buffers
-            buffer = (buffer == readBuffer1) ? readBuffer2 : readBuffer1;
+            // // Swap the buffers
+            // buffer = (buffer == readBuffer1) ? readBuffer2 : readBuffer1;
             offset = 0;
 
             // TODO: remove this debug print
-            Serial.printf("Audio Recording High watermark: %u\n", uxTaskGetStackHighWaterMark(NULL));
+            // printf("Audio Recording High watermark: %u\n", uxTaskGetStackHighWaterMark(NULL));
         }
 
         yield();
@@ -121,7 +144,7 @@ void audioRecordingTask(void *pvParameters) {
  * The buffer length is in elements (not bytes).
  */
 uint32_t generateSineWave(float frequency, int16_t amplitude, uint32_t offset, uint16_t* buffer, uint32_t length) {
-    const float angularFreq = 2.0 * PI * frequency / SAMPLE_RATE;
+    const float angularFreq = 2.0 * PI * frequency / REC_SAMPLE_RATE;
     for (int i = 0; i < length/2; i++) {
         buffer[2*i] = buffer[2*i+1] = amplitude * sin(angularFreq * (i + offset));
     }
@@ -169,133 +192,11 @@ void sendAudioToI2S(uint8_t* data, uint32_t length) {
  *   0 to 79 is -73dB to +6dB in 1dB steps
  */
 void setVolume(int8_t volume) {
-    audio_codec.setHeadphoneVolume(volume + 48);
-}
-
-
-/**
- * Set up the audio codec for recording and playing back audio.
- * See the AUDIO_OUTPUT define for playback options.
- */
-bool audio_codec_setup() {
-    return // this is a chain of boolean ANDs, so if any fail, the whole thing fails
-
-        // General setup needed
-        audio_codec.enableVREF() && 
-        audio_codec.enableVMID() &&
-
-        // Enable mic bias voltage
-        audio_codec.enableMicBias() &&
-        audio_codec.setMicBiasVoltage(WM8960_MIC_BIAS_VOLTAGE_0_9_AVDD) &&
-
-        // Setup signal flow to the ADC
-        audio_codec.enableLMIC() &&
-        audio_codec.enableRMIC() &&
-
-        // Connect from INPUT1 to "n" (aka inverting) inputs of PGAs (these are default to connected anyway)
-        audio_codec.connectLMN1() &&
-        audio_codec.connectRMN1() &&
-
-        // Disable mutes on PGA inputs (aka INTPUT1)
-        audio_codec.disableLINMUTE() &&
-        audio_codec.disableRINMUTE() &&
-
-        // Set PGA volumes (value from 0-63, maps to -17.25dB to +30.00dB with 0.75dB steps)
-        audio_codec.setLINVOL(RECORDING_VOLUME) &&
-        audio_codec.setRINVOL(RECORDING_VOLUME) &&
-
-        // Set input boosts to get inputs 1 to the boost mixers
-        audio_codec.setLMICBOOST(WM8960_MIC_BOOST_GAIN_0DB) &&
-        audio_codec.setRMICBOOST(WM8960_MIC_BOOST_GAIN_0DB) &&
-
-        // For MIC+ signal of differential mic signal
-        // WM8960_PGAL_VMID for single ended input
-        // WM8960_PGAL_LINPUT2/WM8960_PGAL_RINPUT2 for pseudo-differential input
-        audio_codec.pgaLeftNonInvSignalSelect(WM8960_PGAL_LINPUT2) &&
-        audio_codec.pgaRightNonInvSignalSelect(WM8960_PGAR_RINPUT2) &&
-
-        // Connect from MIC inputs (aka pga output) to boost mixers
-        audio_codec.connectLMIC2B() &&
-        audio_codec.connectRMIC2B() &&
-
-        // Enable boost mixers
-        audio_codec.enableAINL() &&
-        audio_codec.enableAINR() &&
-
-        //audio_codec.enablePgaZeroCross() && // TODO: what does this do?
-
-#if AUDIO_OUTPUT == 0  // no audio output
-        // Disconnect input boost mixer to output mixer (analog bypass) // this is default
-        // audio_codec.disableLB2LO() &&
-        // audio_codec.disableRB2RO() &&
-
-        // Disconnect DAC outputs from output mixer // this is default
-        // audio_codec.disableLD2LO() &&
-        // audio_codec.disableRD2RO() &&
-
-#else  // have audio output
-    #if AUDIO_OUTPUT == 1  // loopback
-        // Connect input boost mixer to output mixer (analog bypass)
-        audio_codec.enableLB2LO() &&
-        audio_codec.enableRB2RO() &&
-
-        // Set gainstage between booster mixer and output mixer
-        audio_codec.setLB2LOVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
-        audio_codec.setRB2ROVOL(WM8960_OUTPUT_MIXER_GAIN_0DB) &&
-    #else  // manual output
-        // Connect from DAC outputs to output mixer
-        audio_codec.enableLD2LO() &&
-        audio_codec.enableRD2RO() &&
-    #endif
-
-        // Enable output mixers
-        audio_codec.enableLOMIX() &&
-        audio_codec.enableROMIX() &&
-
-        // Provides VMID as buffer for headphone/speaker ground
-        audio_codec.enableOUT3MIX() &&
-
-        // Enable headphone/speaker output
-        audio_codec.enableHeadphones() &&
-        //audio_codec.setHeadphoneVolumeDB(0.00) &&  // happens in the volume monitor task
-#endif
-
-        // CLOCK STUFF, These settings will get you 44.1KHz sample rate, and class-d freq at 705.6kHz
-        audio_codec.enablePLL() &&  // needed for class-d amp clock
-        audio_codec.setPLLPRESCALE(WM8960_PLLPRESCALE_DIV_2) &&
-        audio_codec.setSMD(WM8960_PLL_MODE_FRACTIONAL) &&
-        audio_codec.setCLKSEL(WM8960_CLKSEL_PLL) &&
-        audio_codec.setSYSCLKDIV(WM8960_SYSCLK_DIV_BY_2) &&
-        audio_codec.setBCLKDIV(4) &&
-        audio_codec.setDCLKDIV(WM8960_DCLKDIV_16) &&
-        audio_codec.setPLLN(WM8960_DCLKDIV_16) &&
-        audio_codec.setPLLK(0x86, 0xC2, 0x26) &&  // PLLK=86C226h
-        //audio_codec.set_ADCDIV(0) && // default is 000 (what we need for 44.1KHz)
-        //audio_codec.set_DACDIV(0) && // default is 000 (what we need for 44.1KHz)
-        audio_codec.setWL(WM8960_WL_16BIT) &&
-        audio_codec.enablePeripheralMode() &&
-
-        // Set LR clock to be the same for ADC & DAC internally
-        // Note: should not be changed while ADC is enabled
-        audio_codec.setALRCGPIO() &&
-
-        // enable ADCs (allows for recording)
-        audio_codec.enableAdcLeft() &&
-        audio_codec.enableAdcRight() &&
-
-        // enable DACs (allows for manual output)
-#if AUDIO_OUTPUT == 2  // manual output (using DAC)
-        audio_codec.enableDacLeft() &&
-        audio_codec.enableDacRight() &&
-        audio_codec.disableDacMute() && // default is "soft mute" on, so we must disable mute to make channels active
-#else
-        audio_codec.disableDacLeft() &&
-        audio_codec.disableDacRight() &&
-        audio_codec.enableDacMute() && 
-#endif
-
-        //audio_codec.enableLoopBack(); // Loopback sends ADC data directly into DAC
-        audio_codec.disableLoopBack();
+    if (audio_codec) {
+        audio_codec->setVolume(volume);
+    } else {
+        printf("!! Audio codec not set up\n");
+    }
 }
 
 
@@ -303,30 +204,45 @@ bool audio_codec_setup() {
  * Set up the I2S driver. This makes the ESP32 the master and operate in both RX and TX modes.
  */
 bool i2s_install() {
+    static_assert(REC_BITS_PER_SAMPLE == 8 || REC_BITS_PER_SAMPLE == 16 || REC_BITS_PER_SAMPLE == 24 || REC_BITS_PER_SAMPLE == 32, "Bits per sample must be 8, 16, 24, or 32 - only supported by the I2S driver");
+    static_assert(REC_CHANNELS == 1 || REC_CHANNELS == 2, "Channels must be 1 (mono) or 2 (stereo) - only supported by the I2S driver (unless TDM is supported)");
     const i2s_driver_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX),
-        .sample_rate = SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .sample_rate = REC_SAMPLE_RATE,
+        .bits_per_sample = (i2s_bits_per_sample_t)REC_BITS_PER_SAMPLE,  // also supports 8, 24, and 32 bit
+        .channel_format = (REC_CHANNELS == 2) ? I2S_CHANNEL_FMT_RIGHT_LEFT : I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = audio_codec->i2s_comm_format(),
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,  // TODO: does a higher level make sense? (or 0 for default)
-        .dma_buf_count = 8,  // TODO: no idea what this should be
+        
+        // For more info see https://www.reddit.com/r/esp32/comments/muj6wo/esp32_i2s_dma_settings_dma_buf_len_and_dma_buf/
+        // Basically:
+        //  * dma_buf_len is the number of samples in each buffer, whenever we read from I2S we
+        //    read in multiples of this size
+        //  * increasing dma_buf_len reduces CPU overhead but reduces granularity and increases
+        //    latency
+        //  * dma_buf_count is the number of buffers, increasing this increases memory usage but
+        //    allows for more buffers to be queued up in the driver before a call to i2s_read
+        // If we are keeping up with the audio data, we can use a small dma_buf_count (like 2). To
+        // reduce latency, we can use a small dma_buf_len (384 would be 8 ms at 48 kHz, 128 would
+        // be 8 ms at 16 kHz).
+        .dma_buf_count = 8,  // TODO: lower this
         .dma_buf_len = DMA_BUFFER_SAMPLE_LEN,
+
         .use_apll = false,
         .tx_desc_auto_clear = false,  // for cleaner outputs when there are delays
         .fixed_mclk = 0,
         .mclk_multiple = I2S_MCLK_MULTIPLE_DEFAULT,  // TODO: 512?
-        .bits_per_chan = I2S_BITS_PER_CHAN_DEFAULT,
+        .bits_per_chan = I2S_BITS_PER_CHAN_DEFAULT,  // default means to use the same as bits_per_sample
     };
 #ifdef CHECK_I2S_EVENTS
 #define QUEUE_ARG 4, &i2sQueue
 #else
 #define QUEUE_ARG 0, NULL
 #endif
-    if (i2s_driver_install(I2S_PORT, &i2s_config, QUEUE_ARG) != ESP_OK) { Serial.println("!! i2s_driver_install()"); return false; }
+    if (i2s_driver_install(I2S_PORT, &i2s_config, QUEUE_ARG) != ESP_OK) { printf("!! i2s_driver_install()\n"); return false; }
     return true;
 
-    //i2s_set_clk(I2S_PORT, SAMPLE_RATE, BITS_PER_SAMPLE, I2S_CHANNEL_STEREO);
+    //i2s_set_clk(I2S_PORT, REC_SAMPLE_RATE, REC_BITS_PER_SAMPLE, I2S_CHANNEL_STEREO);
     //i2s_set_dac_mode(I2S_DAC_CHANNEL_BOTH_EN);
 }
 
@@ -342,7 +258,7 @@ bool i2s_setpin() {
         .data_out_num = I2S_DAC_DATA,
         .data_in_num = I2S_ADC_DATA
     };
-    if (i2s_set_pin(I2S_PORT, &pin_config) != ESP_OK) { Serial.println("!! i2s_set_pin()"); return false; }
+    if (i2s_set_pin(I2S_PORT, &pin_config) != ESP_OK) { printf("!! i2s_set_pin()\n"); return false; }
     return true;
 }
 
@@ -353,15 +269,15 @@ bool i2s_setpin() {
  * If there is a problem with the audio setup, the program will freeze.
  */
 bool setupAudio() {
-    if (!audio_codec.begin()) { Serial.println("!! WM8960 audio codec did not respond. Please check wiring."); return false; }
-    if (!audio_codec_setup()) { Serial.println("!! WM8960 audio codec setup failed."); return false; }
+    audio_codec = create_audio_codec();
+    if (!audio_codec->setup()) { printf("!! Audio codec setup failed.\n"); return false; }
     vTaskDelay(10 / portTICK_PERIOD_MS); // Give time for codec to settle after setup
     if (!i2s_install() || !i2s_setpin()) { return false; }
 
     // Start the audio recording task
     // TODO: can the stack size be smaller?
     if (xTaskCreate(audioRecordingTask, "AudioRecording", 4096, NULL, 1, NULL) != pdPASS) {
-        Serial.println("!! Failed to create audio recording task");
+        printf("!! Failed to create audio recording task\n");
         return false;
     }
     return true;

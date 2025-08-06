@@ -2,13 +2,24 @@
 
 #include <stdint.h>
 
+// Which audio codec to use
+#define AUDIO_CODEC_WM8960 1
+#define AUDIO_CODEC_ES8388 2
+#define AUDIO_CODEC_TAC5x12 4
+#define AUDIO_CODEC AUDIO_CODEC_ES8388
+
 // Audio Format Parameters
-// These cannot just be changed here without also changing the audio codec and I2S setup
-#define SAMPLE_RATE 44100
-#define BITS_PER_SAMPLE 16
-#define CHANNELS 2
-#define BYTES_PER_SAMPLE (BITS_PER_SAMPLE / 8)
-#define ONE_HOUR_OF_DATA (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * 3600)
+// These cannot just be changed here without also changing the audio codec, I2S setup, and other parts of the code manually
+#define REC_SAMPLE_RATE 44100
+#define REC_BITS_PER_SAMPLE 16
+#define REC_CHANNELS 2
+#define REC_BYTES_PER_SAMPLE (REC_BITS_PER_SAMPLE / 8)
+#define ONE_HOUR_OF_DATA (REC_SAMPLE_RATE * REC_CHANNELS * REC_BYTES_PER_SAMPLE * 3600)
+
+#define PLAY_SAMPLE_RATE 44100
+#define PLAY_BITS_PER_SAMPLE 16
+#define PLAY_CHANNELS 2
+#define PLAY_BYTES_PER_SAMPLE (PLAY_BITS_PER_SAMPLE / 8)
 
 /**
  * Set up the audio codec and I2S for recording audio.
