@@ -2,6 +2,8 @@
  * Math utilities for ESP32. These are primarily optimized for speed on the ESP32.
  */
 #pragma once
+#include <stdint.h>
+#include <stdbool.h>
 
 // Optimize for speed, not size; put in a function definition right before
 // function name to apply it to that function. This is more aggression than
@@ -446,64 +448,19 @@ static float OPTIMIZE_FOR_SPEED atan2_fast_d9(float y, float x) {
     Serial.printf("Average error for atan2_fast_d5: %.9f, atan2_fast_d7: %.9f, atan2_fast_d9: %.9f\n", sum_d5_err / 1000000.0, sum_d7_err / 1000000.0, sum_d9_err / 1000000.0);
  */
 
-const static uint16_t sinTable16[] = {
-    0, 1145, 2289, 3435, 4572, 5716, 6853, 7989, 9125, 10255, 11385,
-    12508, 13631, 14745, 15859, 16963, 18067, 19165, 20253, 21342, 22417,
-    23489, 24553, 25610, 26659, 27703, 28731, 29755, 30773, 31777, 32772,
-    33756, 34734, 35697, 36649, 37594, 38523, 39445, 40350, 41247, 42131,
-    42998, 43856, 44701, 45528, 46344, 47147, 47931, 48708, 49461, 50205,
-    50933, 51646, 52342, 53022, 53686, 54334, 54969, 55579, 56180, 56760,
-    57322, 57866, 58394, 58908, 59399, 59871, 60327, 60768, 61184, 61584,
-    61969, 62330, 62677, 63000, 63304, 63593, 63858, 64108, 64334, 64545,
-    64731, 64903, 65049, 65177, 65289, 65377, 65449, 65501, 65527, 65535,
-    65535
-};
-
- /**
-  * Fast sine and cosine of an angle in degrees. This uses a precomputed 16-bit
-  * sine table for degrees from 0 to 90 degrees.
-  * 
-  * From https://github.com/RobTillaart/FastTrig. Note: the original library
-  * provides code to generate the table including ones with more bits for
-  * higher accuracy if needed.
-  */
-static void OPTIMIZE_FOR_SPEED sincos_fast(float degrees, float *sine, float *cosine) {
-    bool sin_neg = (degrees < 0);
-    bool cos_neg = false;
-    if (sin_neg) { degrees = -degrees; }
-
-    long whole = (long)degrees;
-    uint8_t remain = (degrees - whole) * 256;
-    if (whole >= 360) { whole %= 360; }
-
-    // deal with quadrants
-    int y = whole;  // shrink data type since number is always in [0, 360)
-    if (y >= 180) { y -= 180; sin_neg = !sin_neg; cos_neg = !cos_neg; }
-    if (y >= 90) {
-        y = 180 - y;
-        if (remain != 0) { remain = -remain; y--; }
-        cos_neg = !cos_neg;
-    }
-
-    // float value improves ~4% on average error for ~60 bytes.
-    // SIN
-    uint16_t value = sinTable16[y];
-    // interpolate if needed
-    if (remain > 0) { value += ((sinTable16[y+1] - value) / 8 * remain) / 32; } //  == * remain / 256
-    if (sin_neg) { value = -value; }
-    *sine = value * 0.0000152590219f;  //  = / 65535.0
-
-    // COS
-    value = sinTable16[90-y];
-    if (remain > 0)
-    {
-        value = sinTable16[89-y];
-        remain = 256 - remain;
-        value += ((sinTable16[90-y] - value) / 8 * remain) / 32;  //  == * remain / 256
-    }
-    if (cos_neg) { value = -value; }
-    *cosine = value * 0.0000152590219f;  //  = / 65535.0
-}
+/**
+ * Fast sine and cosine. This uses a precomputed 24-bit sine table for the first
+ * quarter of a circle.
+ * 
+ * Inspired by https://github.com/RobTillaart/FastTrig but even more optimized:
+ *   - Uses a 24-bit table instead of 16-bit for better accuracy at effectively
+ *     the same speed (but more memory).
+ *   - More entries in the table for better accuracy at effectively the same
+ *     speed (but more memory).
+ *   - Table size is a power of 2 for faster indexing/math.
+ *   - Some simplifications taken in the math to increase its speed.
+ */
+static void OPTIMIZE_FOR_SPEED sincos_fast(float radians, float *sine, float *cosine);
 
 
 /////////////////////////////////////
@@ -527,7 +484,7 @@ static inline __attribute__((always_inline)) OPTIMIZE_FOR_SPEED float carg_fast(
 static inline __attribute__((always_inline)) OPTIMIZE_FOR_SPEED cfloat iexp_fast(float x) {
     //return cos(x) + I * sin(x);
     float real, imag;
-    sincos_fast(x * (180.0f / PI_), &imag, &real);
+    sincos_fast(x, &imag, &real);
     return real + I * imag;
 }
 
