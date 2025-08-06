@@ -41,5 +41,5 @@ ClockSignal::~ClockSignal() {
     channels_in_use &= ~(1 << channel.channel); // mark this channel as not in use
 }
 
-void ClockSignal::pause() { ledc_timer_pause(timer.speed_mode, timer.timer_num); }
-void ClockSignal::resume() { ledc_timer_resume(timer.speed_mode, timer.timer_num); }
+esp_err_t ClockSignal::pause() { return ledc_timer_pause(timer.speed_mode, timer.timer_num); }
+esp_err_t ClockSignal::resume() { return ledc_timer_resume(timer.speed_mode, timer.timer_num); }

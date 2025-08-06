@@ -17,6 +17,6 @@ class ClockSignal {
 public:
     ClockSignal(uint32_t frequency, int gpio);
     ~ClockSignal();
-    void pause();
-    void resume();
+    esp_err_t pause();
+    esp_err_t resume();
 };
