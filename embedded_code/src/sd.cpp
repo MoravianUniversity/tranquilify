@@ -34,8 +34,9 @@
 
 // Speed notes:
 //   - We can write ~1350 bytes/ms to the SD card (at 25 MHz) using the dedicated SPI bus
-//     - That is about 1.3 MB/s (the audio is 172 KB/s)
+//     - That is about 1.3 MB/s (44.1 kHz audio is 172 KB/s)
 //     - 30 MHz: 1740 bytes/ms -> 1.7 MB/s  (same as 35 MHz)
+//       [48 kHz audio is 192 bytes/ms, thus only 9.1% of the time is used for writing audio data]
 //   - Opening a file takes ~100 us (there seems to be some caching, first open is slower)
 //     - At 30 MHz it is ~70 us after the first few opens
 // Should probably not leave files open and just reopen them for every read/write as opening is
