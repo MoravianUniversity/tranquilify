@@ -11,7 +11,7 @@
 // Sine Table generated with:
 //    (np.sin(np.linspace(0, np.pi/2, 256+1)) * (2**24-1)).round().astype(np.int32)
 // and then duplicated the last value for overflow protection
-const static int32_t __sin_table[] = {
+constexpr static int32_t __sin_table[] = {
               0,   102943,   205882,   308814,   411733,   514638,
          617523,   720384,   823219,   926022,  1028791,  1131521,
         1234208,  1336849,  1439440,  1541976,  1644455,  1746871,
@@ -76,7 +76,7 @@ constexpr static float __sin_table_scale = 1.0f / __sin_table[__sin_table_size];
  * 
  * Total this takes ~1 KB of ram for the lookup table.
  */
-static void OPTIMIZE_FOR_SPEED sincos_fast(float radians, float *sine, float *cosine) {
+void OPTIMIZE_FOR_SPEED sincos_fast(float radians, float *sine, float *cosine) {
     bool sin_neg = (radians < 0), cos_neg = false;
     if (sin_neg) { radians = -radians; }
 
@@ -96,12 +96,12 @@ static void OPTIMIZE_FOR_SPEED sincos_fast(float radians, float *sine, float *co
 
     // SIN
     int32_t value = __sin_table[y];
-    if (remain > 0) { value += (__sin_table[y+1] - value) * remain; }
+    if (likely(remain > 0)) { value += (__sin_table[y+1] - value) * remain; }
     *sine = (sin_neg ? -value : value) * __sin_table_scale;
 
     // COS
     y = __sin_table_size-y;
     value = __sin_table[y];
-    if (remain > 0) { value += (__sin_table[y-1] - value) * remain; }
+    if (likely(remain > 0)) { value += (__sin_table[y-1] - value) * remain; }
     *cosine = (cos_neg ? -value : value) * __sin_table_scale;
 }

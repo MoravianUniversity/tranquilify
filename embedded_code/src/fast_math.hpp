@@ -4,6 +4,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 // Optimize for speed, not size; put in a function definition right before
 // function name to apply it to that function. This is more aggression than
@@ -11,6 +12,19 @@
 // results. In some cases (due to larger code size), it may even be slower.
 // Use with caution.
 #define OPTIMIZE_FOR_SPEED __attribute__((optimize("Ofast")))
+
+
+// The ESP library defines these macros as no-ops unless all of the entire
+// compilation is set to performance (but we want most to be compiled for
+// size). So we redefine them here.
+#ifdef likely
+#undef likely
+#endif
+#define likely(x)      __builtin_expect(!!(x), 1)
+#ifdef unlikely
+#undef unlikely
+#endif
+#define unlikely(x)    __builtin_expect(!!(x), 0)
 
 
 //////////////////////////////////////////////////
@@ -460,7 +474,7 @@ static float OPTIMIZE_FOR_SPEED atan2_fast_d9(float y, float x) {
  *   - Table size is a power of 2 for faster indexing/math.
  *   - Some simplifications taken in the math to increase its speed.
  */
-static void OPTIMIZE_FOR_SPEED sincos_fast(float radians, float *sine, float *cosine);
+void OPTIMIZE_FOR_SPEED sincos_fast(float radians, float *sine, float *cosine);
 
 
 /////////////////////////////////////
