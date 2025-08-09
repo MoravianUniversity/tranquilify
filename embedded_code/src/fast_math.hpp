@@ -1,6 +1,15 @@
 /**
  * Math utilities for ESP32. These are primarily optimized for speed on the ESP32.
  */
+
+// First some general notes on speeds:
+// * See https://www.reddit.com/r/esp32/comments/t46960/whats_the_esp32_s3_floating_point_performance/ for some ESP32-S3 speed tests
+//   * `float32` division is abysmal (about 1/50th the speed of `float32` multiplication) but the
+//     `recip()` function below can be much faster.
+//   * `float32` has roughly the same speed as ints for addition and multiplication but not division
+//   * `float32` has special FMA (fused multiply-add) instructions that make it really fast for
+//     multiplication and addition together, should use that whenever possible
+
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
