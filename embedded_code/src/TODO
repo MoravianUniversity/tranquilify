@@ -1,0 +1,12 @@
+List of major TODO items:
+- Make volume control more adjustable based on the audio codec being used
+- Test ES8388 intrerface
+  - Try ALC?
+  - Do we need to reset internal state machine?
+  - Do the clocks all work correctly? MCLK, LRCK, SCLK, BCLK, ...
+    - The ESP32 can generate MCLK, but always uses 100 kHz or 400 kHz I2C clock speed (SCLK), not sure about LRCK and BCLK
+    - My multimeter can only read frequencies up to 200 kHz
+- Create TAC5x12 audio codec interface
+- Measure latency of the audio codecs and processing
+- Optimize task stack sizes
+- Writing audio data and timestamps needs better synchronization

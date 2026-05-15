@@ -175,14 +175,14 @@ inline static float OPTIMIZE_FOR_SPEED sqrt_fast(float x) {
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("sqrt() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("sqrt() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     for (int i = 0; i < 10000; i++) { ys[i] = sqrt_fast(xs[i]); }
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("sqrt_fast() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("sqrt_fast() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
     float total_err = 0;
     float max_err = 0;
     for (int i = 0; i < 10000; i++) {
@@ -190,14 +190,14 @@ inline static float OPTIMIZE_FOR_SPEED sqrt_fast(float x) {
         total_err += err;
         if (err > max_err) max_err = err;
     }
-    Serial.printf("sqrt_fast() max rel error: %0.9f, avg rel error: %0.9f\n", max_err, total_err / 10000.0);
+    printf("sqrt_fast() max rel error: %0.9f, avg rel error: %0.9f\n", max_err, total_err / 10000.0);
 
     start = esp_cpu_get_ccount();
     for (int i = 0; i < 10000; i++) { ys[i] = sqrt_fast_2(xs[i]); }
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("sqrt_fast_2() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("sqrt_fast_2() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
     total_err = 0;
     max_err = 0;
     for (int i = 0; i < 10000; i++) {
@@ -205,7 +205,7 @@ inline static float OPTIMIZE_FOR_SPEED sqrt_fast(float x) {
         total_err += err;
         if (err > max_err) max_err = err;
     }
-    Serial.printf("sqrt_fast_2() max rel error: %0.9f, avg rel error: %0.9f\n", max_err, total_err / 10000.0);
+    printf("sqrt_fast_2() max rel error: %0.9f, avg rel error: %0.9f\n", max_err, total_err / 10000.0);
 */
 
 
@@ -261,35 +261,35 @@ static float OPTIMIZE_FOR_SPEED exp_fast_o1(float x) {
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("exp() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("exp() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     for (int i = 0; i < 10000; i++) { ys[i] = exp_a(xs[i]); }
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("exp_a() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("exp_a() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     for (int i = 0; i < 10000; i++) { ys[i] = exp_b(xs[i]); }
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("exp_b() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("exp_b() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     for (int i = 0; i < 10000; i++) { ys[i] = exp_c(xs[i]); }
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("exp_c() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("exp_c() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     for (int i = 0; i < 10000; i++) { ys[i] = exp_d(xs[i]); }
     end = esp_cpu_get_ccount();
     diff = end - start;
     total += diff;
-    Serial.printf("exp_d() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
+    printf("exp_d() took %d cycles / %0.3f ms\n", diff, diff / CPU_FREQ);
 */
 
 
@@ -421,30 +421,30 @@ static float OPTIMIZE_FOR_SPEED atan2_fast_d9(float y, float x) {
     ans1 += atan2f(y, x); ans1 += atan2f(y, x); ans1 += atan2f(y, x); ans1 += atan2f(y, x); ans1 += atan2f(y, x);
     end = esp_cpu_get_ccount();
     diff = (end - start) / 10;
-    Serial.printf("atan2f: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
+    printf("atan2f: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     float ans2 = atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x);
     ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x); ans2 += atan2_fast_d5(y, x);
     end = esp_cpu_get_ccount();
     diff = (end - start) / 10;
-    Serial.printf("atan2_fast_d5: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
+    printf("atan2_fast_d5: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     float ans3 = atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x);
     ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x); ans3 += atan2_fast_d7(y, x);
     end = esp_cpu_get_ccount();
     diff = (end - start) / 10;
-    Serial.printf("atan2_fast_d7: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
+    printf("atan2_fast_d7: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
 
     start = esp_cpu_get_ccount();
     float ans4 = atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x);
     ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x); ans4 += atan2_fast_d9(y, x);
     end = esp_cpu_get_ccount();
     diff = (end - start) / 10;
-    Serial.printf("atan2_fast_d9: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
+    printf("atan2_fast_d9: %d cycles / %0.4f ms\n", diff, (diff) / CPU_FREQ);
 
-    Serial.printf("atan2f: %f, atan2_fast_d5: %f, atan2_fast_d7: %f, atan2_fast_d9: %f\n", ans1/10, ans2/10, ans3/10, ans4/10);
+    printf("atan2f: %f, atan2_fast_d5: %f, atan2_fast_d7: %f, atan2_fast_d9: %f\n", ans1/10, ans2/10, ans3/10, ans4/10);
 
     float max_d5_err = fabsf(ans1 - ans2);
     float max_d7_err = fabsf(ans1 - ans3);
@@ -467,8 +467,8 @@ static float OPTIMIZE_FOR_SPEED atan2_fast_d9(float y, float x) {
         sum_d9_err += fabsf(ans1 - ans4);
     }
 
-    Serial.printf("Max error for atan2_fast_d5: %.9f, atan2_fast_d7: %.9f, atan2_fast_d9: %.9f\n", max_d5_err, max_d7_err, max_d9_err);
-    Serial.printf("Average error for atan2_fast_d5: %.9f, atan2_fast_d7: %.9f, atan2_fast_d9: %.9f\n", sum_d5_err / 1000000.0, sum_d7_err / 1000000.0, sum_d9_err / 1000000.0);
+    printf("Max error for atan2_fast_d5: %.9f, atan2_fast_d7: %.9f, atan2_fast_d9: %.9f\n", max_d5_err, max_d7_err, max_d9_err);
+    printf("Average error for atan2_fast_d5: %.9f, atan2_fast_d7: %.9f, atan2_fast_d9: %.9f\n", sum_d5_err / 1000000.0, sum_d7_err / 1000000.0, sum_d9_err / 1000000.0);
  */
 
 /**

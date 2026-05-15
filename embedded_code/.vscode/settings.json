@@ -53,6 +53,9 @@
         "typeinfo": "cpp"
     },
     "cSpell.words": [
+        "demixed",
+        "Demixing",
         "Tranquilify"
-    ]
+    ],
+    "idf.pythonInstallPath": "/usr/bin/python3"
 }

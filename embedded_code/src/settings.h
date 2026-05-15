@@ -1,8 +1,8 @@
 #pragma once
 
 
-/** Set up the settings for the program. Settings are persistently stored in SPIFFS. */
-bool setupSettings();
+/** Set up the settings for the program. Settings are persistently stored on-chip. */
+void setupSettings();
 
 
 ///// Counter /////

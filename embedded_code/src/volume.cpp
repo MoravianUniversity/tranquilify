@@ -3,11 +3,11 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-
-#include <Arduino.h> // for analogRead()
+#include <string.h> // for memset
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <driver/adc.h>
 
 
 // Number of volume readings to average over, higher will be smoother but slower to respond
@@ -17,9 +17,11 @@
 #define VOL_READING_DELAY 10
 
 // The pin the volume is connected to
-#define VOLUME_PIN A0
+#define VOLUME_PIN 34  // A2, on ADC1 (ADC2 has several restrictions, may as well avoid it)
+#define VOLUME_CHANNEL ADC1_CHANNEL_6  // need to look at datasheet for converting pin to channel
 
 // Possible range of the volumes in dB (defined by the audio codec)
+// TODO: adjust these based on the audio codec
 #define ABSOLUTE_MAX_VOLUME 6
 #define ABSOLUTE_MIN_VOLUME -73 // mapped to the value 0
 
@@ -46,7 +48,7 @@ void adjustVolumeTask(void* pvParameters) {
 
     // Get the initial readings and total
     for (int i = 0; i < NUM_OF_VOL_READINGS; i++) {
-        volumeReadings[i] = analogRead(VOLUME_PIN);
+        volumeReadings[i] = adc1_get_raw(VOLUME_CHANNEL);
         total += volumeReadings[i];
         vTaskDelay(VOL_READING_DELAY / portTICK_PERIOD_MS / 4); // shorter delay to get the initial readings faster
     }
@@ -57,7 +59,7 @@ void adjustVolumeTask(void* pvParameters) {
         // Read the volume level from the ADC into the rolling average array
         // Also update the total to make the average calculation faster
         total -= volumeReadings[i];
-        volumeReadings[i] = analogRead(VOLUME_PIN);
+        volumeReadings[i] = adc1_get_raw(VOLUME_CHANNEL);
         total += volumeReadings[i];
         if (++i >= NUM_OF_VOL_READINGS) { i = 0; }
 
@@ -85,12 +87,20 @@ void adjustVolumeTask(void* pvParameters) {
  * audio codec's volume.
  * The return value indicates if the task was successfully created.
  */
-bool setupVolumeMonitor() {
+void setupVolumeMonitor() {
+    ESP_ERROR_CHECK(adc1_config_width(ADC_WIDTH_BIT_12));  // 12-bit width gives values 0 to 4096
+    ESP_ERROR_CHECK(adc1_config_channel_atten(VOLUME_CHANNEL, ADC_ATTEN_DB_11));  // widest range of reading values
+
+#ifdef DEBUG
+    gpio_num_t pin;
+    ESP_ERROR_CHECK(adc1_pad_get_io_num(VOLUME_CHANNEL, &pin));
+    assert(pin == VOLUME_PIN);
+#endif
+
     // A stack size of 1024 was just barely too small (could do a printf() but not setVolume())
     // With +80, the high water mark is 40, indicating +40 should be sufficient, but reducing to +72 becomes too small
     if (xTaskCreate(adjustVolumeTask, "AdjustVolume", 1024+80+48, NULL, tskIDLE_PRIORITY, NULL) != pdPASS) {
         printf("!! Failed to create the adjust volume task\n");
-        return false;
+        abort();
     }
-    return true;
 }

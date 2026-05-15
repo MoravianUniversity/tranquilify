@@ -104,7 +104,7 @@ void audioRecordingTask(void *pvParameters) {
         printf("Audio sample range: %d to %d\n", min, max);
 
         memcpy(writeBuffer, &buffer[offset], bytesRead);
-        lowPassFilter(writeBuffer, bytesRead, 0.05, REC_CHANNELS);
+        lowPassFilter(writeBuffer, bytesRead, 0.05);
 
         //vTaskDelay(40 / portTICK_PERIOD_MS); // delay for 10 ms to allow other tasks to run
         sendAudioToI2S(writeBuffer, bytesRead); // send the audio data to the I2S bus for playback

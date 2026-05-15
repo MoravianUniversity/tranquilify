@@ -7,4 +7,4 @@
  * This sets up an interrupt on the button pin along with a queue to store the timestamps and a
  * task to write them to the SD card.
  */
-bool setupButton();
+void setupButton();

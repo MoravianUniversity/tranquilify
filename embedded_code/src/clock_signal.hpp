@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "driver/ledc.h"
+#include <driver/ledc.h>
 
 /**
  * @brief Generate a clock signal using the LEDC driver.

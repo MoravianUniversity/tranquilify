@@ -7,3 +7,8 @@
 
 // The pin that the debug LED is connected to
 #define DEBUG_LED_PIN 13
+
+/**
+ * Print the current configuration and system information.
+ */
+void print_config();

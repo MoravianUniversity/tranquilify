@@ -8,6 +8,8 @@
  * 
  * You should also configure if OUT1 and/or OUT2 are used for audio output and
  * if IN1, IN2, or their difference are used for audio input.
+ * 
+ * See http://www.everest-semi.com/pdf/ES8388%20DS.pdf
  */
 
 #include "audio_codec.hpp"
